@@ -15,14 +15,15 @@ requires-python = ">=3.8"
 
 dependencies = [
   # HTTP clients / utilities
-  "aiohttp>=3.10.10",      
+  "aiohttp>=3.10.10",
   "requests>=2.32.3",
 
   # Numerical / data science
   "numpy>=1.26.4",
   "pandas>=2.2.3",
   "scipy>=1.13.1",
-  "scikit-learn>=1.5.2",    
+  "scikit-learn>=1.5.2",
+  "simbench>=1.5.3",    
 
   # Plotting / visualization
   "matplotlib>=3.9.2",     
