@@ -127,7 +127,7 @@ class GCN_DSSE_Lightning(pl.LightningModule):
 
         # Set up a learning rate scheduler that reduces the LR if no progress is made
         scheduler = {
-            'scheduler': ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True),
+            'scheduler': ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5),
             'monitor': 'train_loss',  # Replace with your actual validation metric
         }
 

@@ -39,7 +39,7 @@ np.random.seed(SEED)
 random.seed(SEED)
 
 
-def no_errors(grid_ts_instance, rand_topology = False):
+def no_errors(grid_ts_instance, rand_topology = False): # TODO: start by running this case only
     """Case 1: Add random errors to line parameters."""
 
     offset = random.randint(0, len(grid_ts_instance.profiles[('load', 'p_mw')].index))  # Random offset for reproducibility
@@ -148,7 +148,8 @@ def switching(grid_ts_instance, rand_topology = False, voltage_level = 'LV'):
 
 def process_measurement_rates(grid_ts_instance, save_measurement_dataframes = False, models = ['gat_dsse', 'mlp_dsse', 'gcn_dsse']):
     """Process measurement rates and save results."""
-    for measurement_rate, lam_p, lam_pf in zip([0.05, 0.1, 0.2, 0.5, 0.9], [1, 1, 1, 1, 1], [1, 1, 1, 1, 1]): # 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.9, [3, 5, 10, 20, 40], [100, 100, 100, 100, 100]
+    # for measurement_rate, lam_p, lam_pf in zip([0.05, 0.1, 0.2, 0.5, 0.9], [1, 1, 1, 1, 1], [1, 1, 1, 1, 1]): # 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.9, [3, 5, 10, 20, 40], [100, 100, 100, 100, 100]
+    for measurement_rate, lam_p, lam_pf in zip([0.9], [1], [1]): 
         grid_ts_instance.create_measurements_ts(bus_measurement_rate=measurement_rate)
         save_path_meas = f"measurement_rate_{measurement_rate}"
         if save_measurement_dataframes:
@@ -175,10 +176,10 @@ def process_measurement_rates(grid_ts_instance, save_measurement_dataframes = Fa
         test_results_true = grid_ts_instance.values_bus_ts_df[test_start:]
 
         mu_v = 1e-1
-        reg_coefs = {
+        reg_coefs = { # TODO: this will need to be editted for the bi level loss
         'mu_v': mu_v,
         'mu_theta': mu_v,
-        'lam_v': 1,#1e-4,
+        'lam_v': 1, #1e-4,
         'lam_p': lam_p, #1e-8,
         'lam_pf': lam_pf, #1e-6,
         'lam_reg': 0.8,
@@ -250,6 +251,7 @@ def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_s
             'dim_lines': 6,
             'dim_out': 2,
             'dim_hid': 32,
+            'dim_dense' : 32,
             'gnn_layers': 5,
             'heads': 1,
             'K': 2,
@@ -298,6 +300,7 @@ def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_s
             'dim_lines': 6,
             'dim_out': 2,
             'dim_hid': 32,
+            'dim_dense' : 32,
             'gnn_layers': 5,
             'heads': 1,
             'K': 2,
@@ -314,6 +317,7 @@ def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_s
             'dim_lines': 6,
             'dim_out': 2,
             'dim_hid': 32,
+            'dim_dense' : 32,
             'gnn_layers': 4,
             'heads': 1,
             'K': 2,
@@ -334,8 +338,8 @@ def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_s
     # )
 
     # Use the custom callback in the trainer
-    trainer = Trainer(
-        max_epochs=150,
+    trainer = Trainer( # TODO: we will need to use a custom trainer
+        max_epochs=2, # TODO: revert back to 150
         # callbacks=[early_stopping_callback],
     )
     trainer.fit(model, train_dataloader, val_dataloader)
@@ -350,20 +354,25 @@ if __name__ == "__main__":
     # Collect all LV grid codes
     logger.info(f'Device: {device}')
     multiprocessing.freeze_support()
+    # voltage_level = 'LV'
     voltage_level = 'LV'
-    grid_codes = [code for code in sb.collect_all_simbench_codes(lv_level="", all_data=False)
+    grid_codes = [code for code in sb.collect_all_simbench_codes(lv_level="", all_data=False) # the code arbel wanted us to use is 1-MV-urban--0-sw
         if code.split('-')[1] == voltage_level and code.split('-')[-1] == 'sw']
-    num_random_topolgies = 2
+    # num_random_topolgies = 2
+    num_random_topolgies = 1
     j = 0
 
-    for code in grid_codes[15:]:
+    # for code in grid_codes[15:]:
+    # for code in ['1-MV-urban--0-sw']: # this is the code arbel wanted us to use
+    for code in ['1-LV-rural1--0-sw']: # arbitrary LV grid
         save_path = f"{voltage_level}/{code}"
         logger.info(f"Processing {voltage_level} grid: {code}")
 
         # Run the three cases
-        for case_fn in [ parameter_errors, grid_uncertainty,]: # switching,no_errors, switching
-
-            models = ['gat_dsse', 'gat_dsse_mse', 'mlp_dsse', 'mlp_dsse_mse'] #, 'gcn_dsse'
+        # for case_fn in [ parameter_errors, grid_uncertainty,]: # switching,no_errors, switching
+        for case_fn in [no_errors]: # switching,no_errors, switching
+            # models = ['gat_dsse', 'gat_dsse_mse', 'mlp_dsse', 'mlp_dsse_mse'] #, 'gcn_dsse' # overwrite with models = ['gat_dsse']
+            models = ['gat_dsse']
             if case_fn.__name__ == 'switching':
                 models.append('ensemble_gat_dsse')
                 
