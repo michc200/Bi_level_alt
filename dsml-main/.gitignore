@@ -1,0 +1,13 @@
+.idea/
+__pycache__/
+dumps/
+dumps_2019/
+*.html
+*.jmp
+*.pptx
+build/
+robusttest.egg-info/
+Pipfile.lock
+pyenv/
+examples/lightning_logs/
+examples/LV/

@@ -1,0 +1,26 @@
+image: python:3.9-slim
+stages:
+  - Static analysis
+
+Black:
+  stage: Static analysis
+  before_script:
+    - python --version
+    - pip install --upgrade pip
+  script:
+    - pip install black
+    - black -l 100 --check ./src/robusttest/interface/
+    - black -l 100 --check ./src/robusttest/core/
+  tags:
+    - linux
+Flake:
+  stage: Static analysis
+  before_script:
+    - python --version
+    - pip install --upgrade pip
+  script:
+    - pip install flake8
+    - flake8 --max-line-length=100 --ignore=E501,E712 ./src/robusttest/interface/
+    - flake8 --max-line-length=100 --ignore=E501,E712 ./src/robusttest/core/
+  tags:
+  - linux

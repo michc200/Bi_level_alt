@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools >= 69.1.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robusttest"
+version = "0.1.0"
+authors = [{name = "Theodor Haug", email = "thaug@ffe.de"}]
+
+description = "Toolkit library for robustness testing of distribustion system state estimation"
+keywords = ["state estimation"]
+readme = "README.md"
+
+requires-python = ">=3.8"
+
+dependencies = [
+  # HTTP clients / utilities
+  "aiohttp>=3.10.10",      
+  "requests>=2.32.3",
+
+  # Numerical / data science
+  "numpy>=1.26.4",
+  "pandas>=2.2.3",
+  "scipy>=1.13.1",
+  "scikit-learn>=1.5.2",    
+
+  # Plotting / visualization
+  "matplotlib>=3.9.2",     
+  "seaborn>=0.13.2",
+  "plotly>=5.6.0",
+
+  # Deep‑learning / ML frameworks
+  "torch>=2.4.1",
+  "torch-geometric>=2.6.1",
+  "torchmetrics>=1.4.3",
+  "pytorch-lightning>=2.4.0",
+
+  # Other scientific
+  "numba>=0.60.0",
+  "h5py>=3.12.1",
+  "pvlib>=0.11.1",
+  "demandlib>=0.1.9",
+  "pandapower==2.14.10",
+  "antropy>=0.1.6",
+  "deepdiff>=8.0.1",
+  "fastjsonschema>=2.20.0",
+
+  # Interactive / notebook
+  "ipython>=8.28.0",
+  "ipykernel>=6.29.5",
+  "jupyter_client>=8.6.3",
+  "jupyter_core>=5.7.2",
+  "ipywidgets>=8.1.5",
+
+  # Utilities
+  "tqdm>=4.66.5",
+  "jsonschema>=4.23.0",
+  "chart-studio>=1.1.0",
+]
+
+classifiers = [
+    # How mature is this project? Common values are
+    #   3 - Alpha
+    #   4 - Beta
+    #   5 - Production/Stable
+    "Development Status :: 4 - Beta",
+
+    "Intended Audience :: Scientists",
+    "Topic :: Testing :: Distribution System State Estimation",
+
+    "Operating System :: OS Independent",
+    # Specify the Python versions you support here.
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+]
+
+[project.urls]
+Repository = "http://gitlab.lrz.de/energy-management-technologies-public/dsml"
