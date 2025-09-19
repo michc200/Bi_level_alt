@@ -4,6 +4,7 @@ import pandas as pd
 import pandapower as pp
 import multiprocessing as mp
 from robusttest.core.grid_time_series import GridTimeSeries
+import pickle 
 
 logger = logging.getLogger("BaselineStateEstimation")
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s - %(name)s - %(levelname)s] - %(message)s')
@@ -202,4 +203,13 @@ class BaselineStateEstimation:
             shared_data.clear()  # Clear shared data dictionary
 
         logger.info("State estimation completed in parallel.")
+        self.baseline_se_results_df = results_df
+
         return results_df
+    
+    def save(self, path: str):
+        pickle.dump(self, open(path, "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+
+    @staticmethod
+    def load(path: str):
+        return pickle.load(open(path, "rb"))

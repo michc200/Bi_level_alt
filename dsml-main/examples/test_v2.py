@@ -21,6 +21,7 @@ import plotly.graph_objects as go
 import logging
 import os
 import warnings
+import pickle
 
 warnings.filterwarnings("ignore")
 
@@ -29,7 +30,6 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s - %(name)s - %(leve
 
 # Set CUDA device
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
 
 if torch.cuda.is_available():
     device = torch.device("cuda")  # NVIDIA GPU (rare on macOS)
@@ -362,48 +362,61 @@ if __name__ == "__main__":
     # Collect all LV grid codes
     logger.info(f'Device: {device}')
     multiprocessing.freeze_support()
-    # voltage_level = 'LV'
-    voltage_level = 'LV'
-    grid_codes = [code for code in sb.collect_all_simbench_codes(lv_level="", all_data=False) # the code arbel wanted us to use is 1-MV-urban--0-sw
-        if code.split('-')[1] == voltage_level and code.split('-')[-1] == 'sw']
-    # num_random_topolgies = 2
-    num_random_topolgies = 1
-    j = 0
 
+    GRID = '1-LV-rural1--0-sw' # '1-MV-urban--0-sw'
+    MODEL = 'gat_dsse'
+    MEAS_RATE = 0.9
+
+    grid_time_series_folder = "dsml-data/grid-time-series"
+    baseline_state_estimation_folder = "dsml-data/basline-state-estimation"
+    
+    if not os.path.exists(grid_time_series_folder):
+        os.makedirs(grid_time_series_folder)
+    
+    if not os.path.exists(baseline_state_estimation_folder):
+        os.makedirs(baseline_state_estimation_folder)
+
+    grid_save_path = f"{grid_time_series_folder}/{GRID}"
+    if not os.path.exists(grid_save_path):
+        grid_ts = GridTimeSeries(GRID)
+        grid_ts = no_errors(grid_ts)
+        grid_ts.create_measurements_ts( bus_measurement_rate = MEAS_RATE)
+        grid_ts.save(grid_save_path)
+    
+    else:
+        grid_ts = GridTimeSeries.load(grid_save_path)
+    
+    baseline_se_save_path = f"{baseline_state_estimation_folder}/{GRID}"
+    if not os.path.exists(baseline_se_save_path):
+        baseline_se = BaselineStateEstimation(grid_ts)
+        baseline_se.run_parallel_state_estimation(n_jobs=18)
+        baseline_se.save(baseline_se_save_path)
+
+    else:
+        baseline_se = BaselineStateEstimation.load(baseline_se_save_path)
+
+    train_data, val_data, test_data, x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = grid_ts.create_pyg_data(baseline_se.baseline_se_results_df)
+    pass
     # for code in grid_codes[15:]:
     # for code in ['1-MV-urban--0-sw']: # this is the code arbel wanted us to use
-    for code in ['1-MV-urban--0-sw']: # arbitrary LV grid
-        save_path = f"{voltage_level}/{code}"
-        logger.info(f"Processing {voltage_level} grid: {code}")
+    # for code in ['1-MV-urban--0-sw']: # arbitrary LV grid
+    #     save_path = f"{code}"
+    #     logger.info(f"Processing {voltage_level} grid: {code}")
 
-        # Run the three cases
-        # for case_fn in [ parameter_errors, grid_uncertainty,]: # switching,no_errors, switching
-        for case_fn in [no_errors]: # switching,no_errors, switching
-            # models = ['gat_dsse', 'gat_dsse_mse', 'mlp_dsse', 'mlp_dsse_mse'] #, 'gcn_dsse' # overwrite with models = ['gat_dsse']
-            models = ['gat_dsse']
-            if case_fn.__name__ == 'switching':
-                models.append('ensemble_gat_dsse')
+    #     # Run the three cases
+    #     # for case_fn in [ parameter_errors, grid_uncertainty,]: # switching,no_errors, switching
+    #     for case_fn in [no_errors]: # switching,no_errors, switching
+    #         # models = ['gat_dsse', 'gat_dsse_mse', 'mlp_dsse', 'mlp_dsse_mse'] #, 'gcn_dsse' # overwrite with models = ['gat_dsse']
+    #         models = ['gat_dsse']
+    #         if case_fn.__name__ == 'switching':
+    #             models.append('ensemble_gat_dsse')
                 
-            logger.info(f"Started processing {voltage_level} grid: {code} in case {case_fn.__name__}")
-            save_path = f"{voltage_level}/{code}"
-            save_path = f"{save_path}/{case_fn.__name__}"
-            grid_ts_instance = GridTimeSeries(code, save_path=save_path)
-            grid_ts_instance.save_state()
-            grid_ts_instance = case_fn(grid_ts_instance)
-            process_measurement_rates(grid_ts_instance, save_measurement_dataframes= False, models = models)
+    #         logger.info(f"Started processing {voltage_level} grid: {code} in case {case_fn.__name__}")
+    #         save_path = f"{voltage_level}/{code}"
+    #         save_path = f"{save_path}/{case_fn.__name__}"
+            
+    #         grid_ts_instance.save_state()
+    #         grid_ts_instance = case_fn(grid_ts_instance)
+    #         process_measurement_rates(grid_ts_instance, save_measurement_dataframes= False, models = models)
 
-            logger.info(f"Finished processing {voltage_level} grid: {code} in case {case_fn.__name__}")
-
-            # for i in range(num_random_topolgies):
-            #     logger.info(f"Started processing {voltage_level} random_topology_{i} grid: {code} in case {case_fn.__name__}")
-            #     save_path = f"{voltage_level}/{code}/{case_fn.__name__}/random_topology_{i}"
-            #     grid_ts_instance = GridTimeSeries(code, save_path=save_path)
-            #     np.random.seed(grid_ts_instance.random_seed)
-            #     num_lines_to_remove = np.random.randint(1, len(grid_ts_instance.net.line))
-            #     num_lines_to_add = np.random.randint(1, len(grid_ts_instance.net.line)) 
-            #     _, net_perturbed = perturb_topology(grid_ts_instance.net, num_lines_to_remove=num_lines_to_remove, num_lines_to_add=num_lines_to_add)
-            #     grid_ts_instance.net = net_perturbed
-            #     grid_ts_instance.save_state()
-            #     grid_ts_instance = case_fn(grid_ts_instance, rand_topology = True)
-            #     process_measurement_rates(grid_ts_instance, save_measurement_dataframes= False, models = models)
-            #     logger.info(f"Finished processing {voltage_level} random_topology_{i} grid: {code} in case {case_fn.__name__}")
+    #         logger.info(f"Finished processing {voltage_level} grid: {code} in case {case_fn.__name__}")

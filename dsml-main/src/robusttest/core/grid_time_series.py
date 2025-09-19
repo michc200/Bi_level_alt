@@ -16,6 +16,7 @@ from demandlib import bdew
 from typing import Tuple, List
 import pvlib
 import os
+import pickle
 
 
 # Configure logging
@@ -165,7 +166,13 @@ class GridTimeSeries:
             logger.info(f"State saved to {full_path}/grid_hyperparams.json and {full_path}/grid.json.")
         except Exception as e:
             logger.error(f"Error saving state: {e}")
+    
+    def save(self, path: str):
+        pickle.dump(self, open(path, "wb"), protocol=pickle.HIGHEST_PROTOCOL)
 
+    @staticmethod
+    def load(path: str):
+        return pickle.load(open(path, "rb"))
     
     def add_line_between_buses(self, from_bus: int, to_bus: int) -> None:
         """
@@ -296,7 +303,6 @@ class GridTimeSeries:
             logger.info("Successfully loaded and organized time series data.")
         except Exception as e:
             logger.error(f"Error reading time series data: {e}")
-
 
     def create_measurements_ts(self, bus_measurement_rate=0.1, line_measurement_rate=0.0, trafo_measured=True,
                                    IMSys_v_error=0.005, IMSys_va_error=0.01, IMSys_p_error=0.01, IMSys_q_error=0.02, IMSys_loss_rate = 0,
@@ -518,7 +524,6 @@ class GridTimeSeries:
 
         logger.info(f"Combined time series with measurements and standard deviations created.")
 
-
     def save_measurement_dataframes(self, filepath: str) -> None:
         """
         Save the measurement dataframes to CSV files.
@@ -555,8 +560,6 @@ class GridTimeSeries:
         self.measurements_bus_ts_df = pd.read_csv(bus_filepath, index_col=0)
         self.measurements_line_ts_df = pd.read_csv(line_filepath, index_col=0)
     
-    
-   
     def create_pyg_data(self, results_df = None):
         """
         Converts the measurements_ts_df into a PyTorch Geometric Data list using the grid topology.
@@ -711,8 +714,6 @@ class GridTimeSeries:
 
         return train_data, val_data, test_data, x_set_mean[:8], x_set_std[:8], edge_attr_set_mean[:6], edge_attr_set_std[:6]
 
-
-        
     def get_bus_param(self):
         df_bus_param = pd.DataFrame(index=self.net.bus.index)
         df_bus_param["vn_kv"] = self.net.bus["vn_kv"]
@@ -724,7 +725,6 @@ class GridTimeSeries:
                     df_bus_param["bool_zero_inj"][i]=1.
                     
         self.node_param = df_bus_param
-
 
     def get_edge_param(self):
     
