@@ -16,7 +16,7 @@ from src.robusttest.core.SE.gat_dsse import GAT_DSSE_Lightning
 from src.robusttest.core.SE.mlp_dsse import MLP_DSSE_Lightning
 from src.robusttest.core.SE.gnn_dsse import GCN_DSSE_Lightning
 from src.robusttest.core.SE.ensemble_gat_dsse import EnsembleGAT_DSSE
-from src.robusttest.core.SE.bi_level_gat_dsse import BiLevelGAT_DSSE_Lightning
+from external.models.bi_level_gat_dsse import BiLevelGAT_DSSE_Lightning
 from src.robusttest.core.SE.baseline_state_estimation import BaselineStateEstimation
 from external.loss import wls_loss, physical_loss, wls_and_physical_loss
 
