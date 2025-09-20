@@ -18,7 +18,7 @@ from external.utils import (
     train_se_methods,
     process_test_results
 )
-from external.plot_utils import plot_state_estimation_results
+from external.plot_utils import plot_state_estimation_results, init_live_plot, update_live_plot, finalize_live_plot
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -41,12 +41,12 @@ device = torch.device('cpu')
 # Grid Parameters
 GRID_CODE = '1-LV-rural1--0-sw'
 ERROR_TYPE = 'no_errors'
-MEASUREMENT_RATE = 0.5
+MEASUREMENT_RATE = 0.9
 SEED = 15
 
 # Model Parameters
 MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'mlp_dsse', 'ensemble_gat_dsse', 'bi_level_gat_dsse'
-EPOCHS = 20
+EPOCHS = 1000
 BATCH_SIZE = 64
 
 # Loss Configuration

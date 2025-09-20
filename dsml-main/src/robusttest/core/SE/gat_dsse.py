@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 from external.loss import wls_loss, physical_loss, wls_and_physical_loss
+from external.plot_utils import init_live_plot, update_live_plot, finalize_live_plot
 import logging
 from torch.nn.functional import mse_loss  # Import MSE loss function
 
@@ -63,6 +64,9 @@ class GAT_DSSE_Lightning(pl.LightningModule):
         self.train_loss = []
         self.val_loss = []
 
+        # Live plotting
+        self.live_plot_initialized = False
+
     def forward(self, x, edge_index, edge_attr):
         """Forward pass through the GNN."""
         return self.model(x, edge_index, edge_attr)
@@ -106,6 +110,16 @@ class GAT_DSSE_Lightning(pl.LightningModule):
 
         loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
 
+        # Initialize live plot on first training step
+        if not self.live_plot_initialized:
+            try:
+                metrics_structure = [{'train_loss': 0, 'val_loss': 0}]
+                init_live_plot(metrics_structure)
+                self.live_plot_initialized = True
+                logger.info("Live plotting initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize live plot: {e}")
+
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
@@ -136,7 +150,22 @@ class GAT_DSSE_Lightning(pl.LightningModule):
         loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         return loss
-    
+
+    def on_validation_epoch_end(self):
+        """Update live plot at the end of each validation epoch."""
+        if self.live_plot_initialized:
+            try:
+                # Get current epoch losses
+                train_loss = self.trainer.logged_metrics.get('train_loss_epoch', None)
+                val_loss = self.trainer.logged_metrics.get('val_loss', None)
+
+                if train_loss is not None and val_loss is not None:
+                    current_epoch = self.current_epoch
+                    metrics_list = [{'train_loss': float(train_loss.cpu()), 'val_loss': float(val_loss.cpu())}]
+                    update_live_plot(current_epoch, metrics_list)
+            except Exception as e:
+                logger.warning(f"Failed to update live plot: {e}")
+
     def predict_step(self, batch, batch_idx):
         x = batch.x.clone()
         edge_index = batch.edge_index
@@ -228,6 +257,15 @@ class GAT_DSSE_Lightning(pl.LightningModule):
         }
 
         return [optimizer], [scheduler]
+
+    def on_train_end(self):
+        """Finalize live plot when training ends."""
+        if self.live_plot_initialized:
+            try:
+                finalize_live_plot()
+                logger.info("Live plotting finalized")
+            except Exception as e:
+                logger.warning(f"Failed to finalize live plot: {e}")
 
 
 class GAT_DSSE(nn.Module):
