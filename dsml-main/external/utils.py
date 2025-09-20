@@ -17,7 +17,7 @@ from src.robusttest.core.SE.mlp_dsse import MLP_DSSE_Lightning
 from src.robusttest.core.SE.gnn_dsse import GCN_DSSE_Lightning
 from src.robusttest.core.SE.ensemble_gat_dsse import EnsembleGAT_DSSE
 from src.robusttest.core.SE.baseline_state_estimation import BaselineStateEstimation
-from src.robusttest.core.SE.pf_funcs import compute_wls_loss, compute_physical_loss
+from external.loss import wls_loss, physical_loss, wls_and_physical_loss
 
 # Setup logger
 logger = logging.getLogger("dsml_utils")
@@ -325,18 +325,18 @@ def evaluate_loss_components(model, test_loader, x_set_mean, x_set_std,
 
             try:
                 # Compute WLS loss
-                wls_loss, v_i, theta_i = compute_wls_loss(
-                    x[:, :model.num_nfeat], edge_attr[:, :model.num_efeat], output,
+                wls_loss_val = wls_loss(
+                    output, x[:, :model.num_nfeat], edge_attr[:, :model.num_efeat],
                     x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std,
                     edge_index, reg_coefs, node_param, edge_param
                 )
 
                 # Compute physical loss
-                phys_loss = compute_physical_loss(
-                    v_i, theta_i, edge_index, edge_param, node_param, reg_coefs
+                phys_loss = physical_loss(
+                    output, x_set_mean, x_set_std, edge_index, edge_param, node_param, reg_coefs
                 )
 
-                total_wls_loss += wls_loss.item()
+                total_wls_loss += wls_loss_val.item()
                 total_phys_loss += phys_loss.item()
                 num_batches += 1
 
