@@ -55,7 +55,10 @@ class GAT_DSSE_Lightning(pl.LightningModule):
         self.x_std = torch.tensor(x_std)
         self.edge_mean = torch.tensor(edge_mean)
         self.edge_std = torch.tensor(edge_std)
-        self.reg_coefs = reg_coefs
+
+        # Extract reg_coefs from the unified loss_kwargs structure
+        self.reg_coefs = {k: v for k, v in reg_coefs.items() if k not in ['lambda_wls', 'lambda_physical']}
+
         self.num_nfeat = hyperparameters['num_nfeat']
         self.num_efeat = hyperparameters['dim_lines']
         self.lr = hyperparameters['lr']

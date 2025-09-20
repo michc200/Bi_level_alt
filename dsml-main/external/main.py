@@ -7,7 +7,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import torch
 
 # Add parent directory to path for imports
@@ -19,8 +18,10 @@ from external.utils import (
     train_se_methods,
     load_or_create_baseline_se,
     load_or_create_grid_ts,
-    load_or_create_datasets_and_loaders
+    load_or_create_datasets_and_loaders,
+    process_test_results
 )
+from external.plot_utils import plot_state_estimation_results
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -56,11 +57,7 @@ LOSS_TYPE = 'combined'  # Options: 'gsp_wls', 'wls', 'physical', 'combined', 'ms
 LOSS_KWARGS = {
     'lambda_wls': 1.0,        # Weight for WLS loss component
     'lambda_physical': 1.0,   # Weight for physical constraint loss component
-}
-
-# Regularization Coefficients
-REG_COEFS = {
-    'mu_v': 1e-1,
+    'mu_v': 1e-1,            # Regularization coefficients
     'mu_theta': 1e-1,
     'lam_v': 1,
     'lam_p': 1,
@@ -165,12 +162,11 @@ trainer, model = train_se_methods(
     x_set_std=normalization_params['x_set_std'],
     edge_attr_set_mean=normalization_params['edge_attr_set_mean'],
     edge_attr_set_std=normalization_params['edge_attr_set_std'],
-    reg_coefs=REG_COEFS,
+    loss_kwargs=LOSS_KWARGS,
     model_str=MODEL_TYPE,
     epochs=EPOCHS,
     save_path=str(MODEL_DIR),
-    loss_type=LOSS_TYPE,
-    loss_kwargs=LOSS_KWARGS
+    loss_type=LOSS_TYPE
 )
 
 logger.info("Model training completed!")
@@ -190,21 +186,9 @@ logger.info("Running model evaluation on test set...")
 test_results = trainer.predict(model, test_loader)
 
 # Process results into DataFrame
-logger.info("Processing test results...")
-test_results_df = pd.DataFrame()
-
-for timestamp, (vm_pu_tensor, va_degree_tensor) in enumerate(test_results):
-    vm_pu = vm_pu_tensor.squeeze().tolist()
-    va_degree = va_degree_tensor.squeeze().tolist()
-
-    for i in range(len(vm_pu)):
-        bus_id = grid_ts.net.bus.index[i]
-        test_results_df.loc[timestamp, f"bus_{bus_id}_vm_pu"] = vm_pu[i]
-        test_results_df.loc[timestamp, f"bus_{bus_id}_va_degree"] = va_degree[i] * (180 / np.pi)
+test_results_df = process_test_results(test_results, grid_ts)
 
 logger.info("Evaluation completed!")
-logger.info(f"Test time steps: {len(test_results_df)}")
-logger.info(f"Variables predicted: {len(test_results_df.columns)}")
 
 ################################################################################
 #### Results Visualization
@@ -214,57 +198,11 @@ logger.info("="*80)
 logger.info("RESULTS VISUALIZATION")
 logger.info("="*80)
 
-logger.info("Creating visualization...")
-
-# Prepare data for visualization
-test_start = len(train_data) + len(val_data)
-test_baseline = baseline_se.baseline_se_results_df[test_start:]
-test_measurements = grid_ts.measurements_bus_ts_df[test_start:]
-test_results_true = grid_ts.values_bus_ts_df[test_start:]
-
-# Get bus indices for x-axis
-x_values = grid_ts.net.bus.index
-
-# Extract voltage magnitude data for the first test time step
-y_measurements = [test_measurements.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-y_results_true = [test_results_true.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-y_baseline = [test_baseline.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-y_model = [test_results_df.loc[0, f'bus_{bus}_vm_pu'] for bus in x_values]
-
-# Create the visualization
-plt.figure(figsize=(14, 8))
-
-# Plot different traces
-plt.scatter(x_values, y_measurements, label='Measurements', marker='o',
-           color='blue', alpha=0.7, s=50)
-plt.plot(x_values, y_results_true, label='True Values',
-         color='orange', linestyle='-', linewidth=2.5)
-plt.plot(x_values, y_baseline, label='Baseline WLS-DSSE',
-         color='green', linestyle='-', linewidth=2)
-plt.plot(x_values, y_model, label=f'{MODEL_TYPE.upper()}',
-         color='red', linestyle='-', linewidth=2.5)
-
-# Customize the plot
-plt.ylim([1.0125, 1.0275])
-plt.xlabel('Bus Index', fontsize=14)
-plt.ylabel('Voltage Magnitude (p.u.)', fontsize=14)
-plt.title(f'State Estimation Results - {GRID_CODE}\\n'
-          f'Model: {MODEL_TYPE.upper()}, Measurement Rate: {MEASUREMENT_RATE}',
-          fontsize=16, pad=20)
-plt.legend(fontsize=12, loc='best')
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-
-# Save the plot
-plot_filename = f"{MODEL_TYPE}_results_{GRID_CODE.replace('-', '_')}.png"
-plot_path = PLOTS_DIR / plot_filename
-plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-
-logger.info("Visualization created!")
-logger.info(f"Plot saved to: {plot_path}")
-
-# Display the plot
-plt.show()
+# Create state estimation results visualization
+plot_path = plot_state_estimation_results(
+    test_results_df, baseline_se, grid_ts, train_data, val_data,
+    MODEL_TYPE, GRID_CODE, MEASUREMENT_RATE, PLOTS_DIR
+)
 
 ################################################################################
 #### Summary

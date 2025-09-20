@@ -219,8 +219,8 @@ def get_model_config(model_str, num_bus):
 
 
 def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_std,
-                    edge_attr_set_mean, edge_attr_set_std, reg_coefs, model_str='gat_dsse',
-                    epochs=50, save_path='', loss_type='gsp_wls', loss_kwargs=None):
+                    edge_attr_set_mean, edge_attr_set_std, loss_kwargs, model_str='gat_dsse',
+                    epochs=50, save_path='', loss_type='gsp_wls'):
     """
     Train state estimation methods with specified parameters.
 
@@ -230,12 +230,11 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
         val_dataloader: Validation data loader
         x_set_mean, x_set_std: Node normalization parameters
         edge_attr_set_mean, edge_attr_set_std: Edge normalization parameters
-        reg_coefs: Regularization coefficients
+        loss_kwargs: Unified loss configuration containing both regularization coefficients and lambda weights
         model_str: Model type ('gat_dsse', 'mlp_dsse', etc.)
         epochs: Number of training epochs
         save_path: Path to save model
         loss_type: Type of loss function ('gsp_wls', 'wls', 'physical', 'combined', 'mse')
-        loss_kwargs: Additional loss function arguments (e.g., lambda weights for combined loss)
 
     Returns:
         trainer, model: Trained PyTorch Lightning trainer and model
@@ -248,7 +247,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
     if model_str.startswith('gat_dsse'):
         model = GAT_DSSE_Lightning(
             hyperparameters, x_set_mean, x_set_std,
-            edge_attr_set_mean, edge_attr_set_std, reg_coefs,
+            edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
             time_info=True, loss_type=loss_type, loss_kwargs=loss_kwargs
         )
 
@@ -257,7 +256,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
         use_mse = loss_type == 'mse'
         model = MLP_DSSE_Lightning(
             hyperparameters, x_set_mean, x_set_std,
-            edge_attr_set_mean, edge_attr_set_std, reg_coefs,
+            edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
             use_mse_loss=use_mse, time_info=True
         )
 
@@ -266,7 +265,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
         use_mse = loss_type == 'mse'
         model = EnsembleGAT_DSSE(
             hyperparameters, x_set_mean, x_set_std,
-            edge_attr_set_mean, edge_attr_set_std, reg_coefs,
+            edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
             train_dataloader.dataset, time_info=True, use_mse_loss=use_mse
         )
         train_dataloader = model.train_dataloader()
@@ -292,7 +291,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
 
 
 def evaluate_loss_components(model, test_loader, x_set_mean, x_set_std,
-                           edge_attr_set_mean, edge_attr_set_std, reg_coefs):
+                           edge_attr_set_mean, edge_attr_set_std, loss_kwargs):
     """
     Evaluate separate WLS and physical loss components for model analysis.
 
@@ -301,7 +300,7 @@ def evaluate_loss_components(model, test_loader, x_set_mean, x_set_std,
         test_loader: Test data loader
         x_set_mean, x_set_std: Node normalization parameters
         edge_attr_set_mean, edge_attr_set_std: Edge normalization parameters
-        reg_coefs: Regularization coefficients
+        loss_kwargs: Unified loss configuration containing both regularization coefficients and lambda weights
 
     Returns:
         dict: Dictionary containing loss components and metrics
@@ -346,11 +345,11 @@ def evaluate_loss_components(model, test_loader, x_set_mean, x_set_std,
                     wls_loss_val = wls_loss(
                         output, x_nodes, edge_input,
                         x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std,
-                        edge_index, reg_coefs, node_param, edge_param
+                        edge_index, loss_kwargs, node_param, edge_param
                     )
 
                     phys_loss = physical_loss(
-                        output, x_set_mean, x_set_std, edge_index, edge_param, node_param, reg_coefs
+                        output, x_set_mean, x_set_std, edge_index, edge_param, node_param, loss_kwargs
                     )
                 elif model.loss_type == 'wls':
                     # Only WLS loss
@@ -505,3 +504,36 @@ def load_or_create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device
     logger.info(f"Validation batches: {len(val_loader)}")
 
     return train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data
+
+
+def process_test_results(test_results, grid_ts):
+    """
+    Process test results from model predictions into a DataFrame.
+
+    Args:
+        test_results: List of prediction results from trainer.predict()
+        grid_ts: Grid time series instance for bus indexing
+
+    Returns:
+        pd.DataFrame: Processed test results with bus voltage magnitudes and angles
+    """
+    import pandas as pd
+    import numpy as np
+
+    logger.info("Processing test results...")
+    test_results_df = pd.DataFrame()
+
+    for timestamp, (vm_pu_tensor, va_degree_tensor) in enumerate(test_results):
+        vm_pu = vm_pu_tensor.squeeze().tolist()
+        va_degree = va_degree_tensor.squeeze().tolist()
+
+        for i in range(len(vm_pu)):
+            bus_id = grid_ts.net.bus.index[i]
+            test_results_df.loc[timestamp, f"bus_{bus_id}_vm_pu"] = vm_pu[i]
+            test_results_df.loc[timestamp, f"bus_{bus_id}_va_degree"] = va_degree[i] * (180 / np.pi)
+
+    logger.info("Test results processing completed!")
+    logger.info(f"Test time steps: {len(test_results_df)}")
+    logger.info(f"Variables predicted: {len(test_results_df.columns)}")
+
+    return test_results_df
