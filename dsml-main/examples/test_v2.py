@@ -11,6 +11,7 @@ from robusttest.core.grid_utils.perturbe_topology import perturb_topology
 from robusttest.core.SE.gat_dsse import GAT_DSSE_Lightning
 from robusttest.core.SE.mlp_dsse import MLP_DSSE_Lightning
 from robusttest.core.SE.gnn_dsse import GCN_DSSE_Lightning
+from robusttest.core.SE.bi_level_gat_dsse import FAIR_GAT_BILEVEL_Lightning 
 from robusttest.core.SE.ensemble_gat_dsse import EnsembleGAT_DSSE
 from torch_geometric.loader import DataLoader
 from pytorch_lightning import Trainer

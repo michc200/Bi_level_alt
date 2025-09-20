@@ -209,6 +209,31 @@ def compute_physical_loss(v_i, theta_i, edge_index, edge_param, node_param, reg_
     J_phys = J_v + J_theta + J_loading
     return J_phys
 
+def compute_v_theta(output, x_mean, x_std, node_param):
+    """
+    Compute predicted voltage magnitudes (v_i) and angles (theta_i).
+
+    Args:
+        output (torch.Tensor): Model output of shape [num_nodes, 2] (or more).
+        x_mean (torch.Tensor): Mean used for denormalization (size at least 3).
+        x_std (torch.Tensor): Std used for denormalization (size at least 3).
+        node_param (torch.Tensor): Node parameters (for slack bus enforcement).
+
+    Returns:
+        v_i (torch.Tensor): Denormalized voltage magnitudes [num_nodes, 1].
+        theta_i (torch.Tensor): Denormalized voltage angles [num_nodes, 1].
+    """
+    # Voltage magnitudes
+    v_i = output[:, 0:1] * x_std[:1] + x_mean[:1]
+
+    # Voltage angles
+    theta_i = output[:, 1:2] * x_std[2:3] + x_mean[2:3]
+
+    # Enforce slack bus (assuming node_param[:,1] indicates slack bus)
+    theta_i *= (1.0 - node_param[:, 1:2])
+
+    return v_i, theta_i
+
 
 if __name__ == "__main__":
     pass
