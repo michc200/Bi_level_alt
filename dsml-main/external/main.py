@@ -50,7 +50,7 @@ EPOCHS = 1000
 BATCH_SIZE = 64
 
 # Loss Configuration
-LOSS_TYPE = 'wls_and_physical'  # Options: 'gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse'
+LOSS_TYPE = 'gsp_wls'  # Options: 'gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse'
 LOSS_KWARGS = {
     'lambda_wls': 1.0,        # Weight for WLS loss component
     'lambda_physical': 1.0,   # Weight for physical constraint loss component

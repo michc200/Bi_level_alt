@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 import torch
+import torch.nn.functional as F
 from torch_geometric.utils import scatter, get_laplacian
 from src.robusttest.core.SE.pf_funcs import get_pflow, gsp_wls_edge
 
@@ -164,10 +165,60 @@ def wls_and_physical_loss(output, input, edge_input, x_mean, x_std, edge_mean, e
     return combined_loss
 
 
+def calculate_rmse_voltage_components(output, targets, x_mean, x_std, node_param):
+    """
+    Calculate RMSE for voltage magnitude and angle components using external normalization statistics.
+
+    Args:
+        output: Model output (normalized predictions) - [batch*num_nodes, 2] where [:, 0] is voltage mag, [:, 1] is voltage angle
+        targets: True values (normalized targets) - [batch*num_nodes, 2] where [:, 0] is voltage mag, [:, 1] is voltage angle
+        x_mean, x_std: Node normalization parameters from external statistics
+        node_param: Node parameters for slack bus constraints
+
+    Returns:
+        tuple: (rmse_v, rmse_theta) - RMSE for voltage magnitude and angle
+    """
+    # Denormalize predictions using external statistics
+    v_pred = output[:, 0:1] * x_std[:1] + x_mean[:1]  # Voltage magnitude
+    theta_pred = output[:, 1:] * x_std[2:3] + x_mean[2:3]  # Voltage angle
+    theta_pred *= (1. - node_param[:, 1:2])  # Enforce theta_slack = 0
+
+    # Denormalize targets using external statistics
+    v_target = targets[:, 0:1] * x_std[:1] + x_mean[:1]  # Voltage magnitude
+    theta_target = targets[:, 1:] * x_std[2:3] + x_mean[2:3]  # Voltage angle
+    theta_target *= (1. - node_param[:, 1:2])  # Enforce theta_slack = 0
+
+    # Calculate RMSE for each component
+    rmse_v = torch.sqrt(F.mse_loss(v_pred, v_target))
+    rmse_theta = torch.sqrt(F.mse_loss(theta_pred, theta_target))
+
+    return rmse_v, rmse_theta
+
+
+def calculate_rmse_single_component(predictions, targets, component_idx=0):
+    """
+    Calculate RMSE for a single component (normalized values).
+
+    Args:
+        predictions: Model predictions tensor
+        targets: True values tensor
+        component_idx: Index of component to calculate RMSE for (0 for voltage mag, 1 for voltage angle)
+
+    Returns:
+        torch.Tensor: RMSE value for the specified component
+    """
+    pred_component = predictions[:, component_idx:component_idx+1]
+    target_component = targets[:, component_idx:component_idx+1]
+    mse = F.mse_loss(pred_component, target_component)
+    return torch.sqrt(mse)
+
+
 if __name__ == "__main__":
     print("DSML Loss Functions - CPU Optimized")
     print("PyTorch-style loss functions:")
     print("- wls_loss: Weighted Least Squares loss")
     print("- physical_loss: Physical constraint loss")
     print("- wls_and_physical_loss: Combined loss with configurable lambda weights")
+    print("- calculate_rmse_voltage_components: RMSE for voltage magnitude and angle using external normalization")
+    print("- calculate_rmse_single_component: RMSE for individual components")
     print("Uses original get_pflow and gsp_wls_edge from src.robusttest.core.SE.pf_funcs")
