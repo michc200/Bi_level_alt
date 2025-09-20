@@ -2,11 +2,9 @@
 import os
 import warnings
 import logging
-import multiprocessing
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import torch
 
 # Add parent directory to path for imports
@@ -14,11 +12,10 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
 from external.utils import (
-    no_errors,
-    train_se_methods,
-    load_or_create_baseline_se,
     load_or_create_grid_ts,
+    load_or_create_baseline_se,
     load_or_create_datasets_and_loaders,
+    train_se_methods,
     process_test_results
 )
 from external.plot_utils import plot_state_estimation_results
@@ -49,7 +46,7 @@ SEED = 15
 
 # Model Parameters
 MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'mlp_dsse', 'ensemble_gat_dsse'
-EPOCHS = 100
+EPOCHS = 20
 BATCH_SIZE = 64
 
 # Loss Configuration
@@ -97,11 +94,8 @@ logger.info("="*80)
 # Generate unique identifier for this configuration
 grid_id = f"GRID-{GRID_CODE}__MEAS_RATE-{MEASUREMENT_RATE}__ERROR-{ERROR_TYPE}__SEED-{SEED}"
 grid_save_path = GRID_TS_DIR / grid_id
-
-# Load or create grid time series
 grid_ts = load_or_create_grid_ts(GRID_CODE, grid_save_path, MEASUREMENT_RATE)
 
-# Display grid information
 logger.info("Grid loaded successfully!")
 logger.info(f"Buses: {len(grid_ts.net.bus)}")
 logger.info(f"Lines: {len(grid_ts.net.line)}")
@@ -115,14 +109,10 @@ logger.info("="*80)
 logger.info("BASELINE STATE ESTIMATION")
 logger.info("="*80)
 
-# Use same identifier for baseline and dataset
-baseline_save_path = BASELINE_SE_DIR / grid_id
-dataset_save_path = DATASET_DIR / f"{grid_id}.pkl"
-
 # Load or create baseline state estimation
+baseline_save_path = BASELINE_SE_DIR / grid_id
 baseline_se = load_or_create_baseline_se(grid_save_path, baseline_save_path, n_jobs=18)
 
-# Display baseline information
 logger.info("Baseline state estimation loaded!")
 logger.info(f"Time steps processed: {len(baseline_se.baseline_se_results_df)}")
 logger.info(f"Variables per time step: {len(baseline_se.baseline_se_results_df.columns)}")
@@ -136,6 +126,7 @@ logger.info("DATASET CREATION")
 logger.info("="*80)
 
 # Create datasets and data loaders
+dataset_save_path = DATASET_DIR / grid_id
 train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data = load_or_create_datasets_and_loaders(
     grid_ts, baseline_se, BATCH_SIZE, device, dataset_save_path
 )
