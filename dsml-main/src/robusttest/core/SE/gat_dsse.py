@@ -41,15 +41,6 @@ class GAT_DSSE_Lightning(pl.LightningModule):
         self.model = GAT_DSSE(dim_feat=dim_feat, dim_hidden= dim_hidden, dim_dense=dim_dense, dim_out=dim_out,
                               num_layers=num_layers, edge_dim=edge_dim, heads=heads, dropout=dropout)
         
-        # self.model = GAT(in_channels=dim_feat, 
-        #                     hidden_channels=dim_dense,
-        #                     num_layers=num_layers,
-        #                     out_channels=dim_out,
-        #                     dropout=dropout,
-        #                     heads= heads,
-        #                     v2 = True,
-        #                     jk='last')
-
         # Save other required parameters
         self.x_mean = torch.tensor(x_mean)
         self.x_std = torch.tensor(x_std)
@@ -65,7 +56,7 @@ class GAT_DSSE_Lightning(pl.LightningModule):
         self.time_info = time_info
 
         # Loss configuration
-        self.loss_type = loss_type  # Options: 'gsp_wls', 'wls', 'physical', 'combined', 'mse'
+        self.loss_type = loss_type  # Options: 'gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse'
         self.loss_kwargs = loss_kwargs if loss_kwargs is not None else {}
 
         # Loss tracker
@@ -211,7 +202,7 @@ class GAT_DSSE_Lightning(pl.LightningModule):
                                 edge_index=edge_index, edge_param=edge_param,
                                 node_param=node_param, reg_coefs=self.reg_coefs)
 
-        elif self.loss_type == 'combined':
+        elif self.loss_type == 'wls_and_physical':
             # Combined loss with configurable weights
             lambda_wls = self.loss_kwargs.get('lambda_wls', 1.0)
             lambda_physical = self.loss_kwargs.get('lambda_physical', 1.0)
@@ -224,7 +215,7 @@ class GAT_DSSE_Lightning(pl.LightningModule):
                                         lambda_wls=lambda_wls, lambda_physical=lambda_physical)
 
         else:
-            raise ValueError(f"Unknown loss_type: {self.loss_type}. Options: 'gsp_wls', 'wls', 'physical', 'combined', 'mse'")
+            raise ValueError(f"Unknown loss_type: {self.loss_type}. Options: 'gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse'")
 
     def configure_optimizers(self):
         """Configure the optimizer and learning rate scheduler."""

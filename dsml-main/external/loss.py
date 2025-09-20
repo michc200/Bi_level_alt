@@ -19,9 +19,6 @@ from src.robusttest.core.SE.pf_funcs import get_pflow, gsp_wls_edge
 # Force CPU usage
 device = torch.device('cpu')
 
-
-
-
 def wls_loss(output, input, edge_input, x_mean, x_std, edge_mean, edge_std, edge_index, reg_coefs, node_param, edge_param):
     """
     Compute Weighted Least Squares (WLS) loss for state estimation.

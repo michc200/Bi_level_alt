@@ -234,7 +234,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
         model_str: Model type ('gat_dsse', 'mlp_dsse', etc.)
         epochs: Number of training epochs
         save_path: Path to save model
-        loss_type: Type of loss function ('gsp_wls', 'wls', 'physical', 'combined', 'mse')
+        loss_type: Type of loss function ('gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse')
 
     Returns:
         trainer, model: Trained PyTorch Lightning trainer and model
@@ -340,8 +340,8 @@ def evaluate_loss_components(model, test_loader, x_set_mean, x_set_std,
                 num_samples = batch.batch[-1] + 1 if hasattr(batch, 'batch') else 1
 
                 # Use the model's calculate_loss method but override to get components
-                if model.loss_type == 'combined' or model.loss_type == 'gsp_wls':
-                    # For combined/gsp_wls, compute WLS and physical separately for analysis
+                if model.loss_type == 'wls_and_physical' or model.loss_type == 'gsp_wls':
+                    # For wls_and_physical/gsp_wls, compute WLS and physical separately for analysis
                     wls_loss_val = wls_loss(
                         output, x_nodes, edge_input,
                         x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std,

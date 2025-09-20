@@ -50,7 +50,7 @@ EPOCHS = 20
 BATCH_SIZE = 64
 
 # Loss Configuration
-LOSS_TYPE = 'combined'  # Options: 'gsp_wls', 'wls', 'physical', 'combined', 'mse'
+LOSS_TYPE = 'wls_and_physical'  # Options: 'gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse'
 LOSS_KWARGS = {
     'lambda_wls': 1.0,        # Weight for WLS loss component
     'lambda_physical': 1.0,   # Weight for physical constraint loss component
@@ -195,34 +195,3 @@ plot_path = plot_state_estimation_results(
     MODEL_TYPE, GRID_CODE, MEASUREMENT_RATE, PLOTS_DIR
 )
 
-################################################################################
-#### Summary
-################################################################################
-
-logger.info("="*80)
-logger.info("PIPELINE SUMMARY")
-logger.info("="*80)
-
-logger.info("DSML Pipeline completed successfully!")
-logger.info("Summary:")
-logger.info(f"Grid: {GRID_CODE}")
-logger.info(f"Model: {MODEL_TYPE.upper()}")
-logger.info(f"Loss type: {LOSS_TYPE}")
-if LOSS_TYPE == 'combined':
-    logger.info(f"Loss weights: WLS={LOSS_KWARGS['lambda_wls']}, Physical={LOSS_KWARGS['lambda_physical']}")
-logger.info(f"Training epochs: {EPOCHS}")
-logger.info(f"Measurement rate: {MEASUREMENT_RATE}")
-logger.info(f"Test samples: {len(test_results_df)}")
-logger.info("Output files:")
-logger.info(f"Grid data: {grid_save_path}")
-logger.info(f"Baseline SE: {baseline_save_path}")
-logger.info(f"Datasets: {dataset_save_path}")
-logger.info(f"Model: {MODEL_DIR / MODEL_TYPE}")
-logger.info(f"Plot: {plot_path}")
-logger.info("Features:")
-logger.info(f"- PyTorch-style configurable loss functions")
-logger.info(f"- Support for WLS, physical, combined, and MSE losses")
-logger.info(f"- Configurable lambda weights for combined loss")
-logger.info(f"- CPU-optimized execution")
-logger.info(f"- Modular dataset caching and reuse")
-logger.info("All steps completed successfully!")
