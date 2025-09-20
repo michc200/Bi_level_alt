@@ -218,9 +218,8 @@ def get_model_config(model_str, num_bus):
     return configs.get(model_str, configs['gat_dsse'])
 
 
-def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_std,
-                    edge_attr_set_mean, edge_attr_set_std, loss_kwargs, model_str='gat_dsse',
-                    epochs=50, save_path='', loss_type='gsp_wls'):
+def train_se_methods(net, train_dataloader, val_dataloader, normalization_params,
+                    loss_kwargs, model_str='gat_dsse', epochs=50, save_path='', loss_type='gsp_wls'):
     """
     Train state estimation methods with specified parameters.
 
@@ -228,8 +227,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
         net: Power network
         train_dataloader: Training data loader
         val_dataloader: Validation data loader
-        x_set_mean, x_set_std: Node normalization parameters
-        edge_attr_set_mean, edge_attr_set_std: Edge normalization parameters
+        normalization_params: Dictionary containing x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std
         loss_kwargs: Unified loss configuration containing both regularization coefficients and lambda weights
         model_str: Model type ('gat_dsse', 'mlp_dsse', etc.)
         epochs: Number of training epochs
@@ -241,6 +239,12 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
     """
     num_bus = len(net.bus)
     hyperparameters = get_model_config(model_str, num_bus)
+
+    # Extract normalization parameters
+    x_set_mean = normalization_params['x_set_mean']
+    x_set_std = normalization_params['x_set_std']
+    edge_attr_set_mean = normalization_params['edge_attr_set_mean']
+    edge_attr_set_std = normalization_params['edge_attr_set_std']
 
     logger.info(f"Creating {model_str} model with {loss_type} loss")
 
@@ -290,16 +294,14 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
     return trainer, model
 
 
-def evaluate_loss_components(model, test_loader, x_set_mean, x_set_std,
-                           edge_attr_set_mean, edge_attr_set_std, loss_kwargs):
+def evaluate_loss_components(model, test_loader, normalization_params, loss_kwargs):
     """
     Evaluate separate WLS and physical loss components for model analysis.
 
     Args:
         model: Trained model
         test_loader: Test data loader
-        x_set_mean, x_set_std: Node normalization parameters
-        edge_attr_set_mean, edge_attr_set_std: Edge normalization parameters
+        normalization_params: Dictionary containing x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std
         loss_kwargs: Unified loss configuration containing both regularization coefficients and lambda weights
 
     Returns:
@@ -309,6 +311,12 @@ def evaluate_loss_components(model, test_loader, x_set_mean, x_set_std,
     total_wls_loss = 0.0
     total_phys_loss = 0.0
     num_batches = 0
+
+    # Extract normalization parameters
+    x_set_mean = normalization_params['x_set_mean']
+    x_set_std = normalization_params['x_set_std']
+    edge_attr_set_mean = normalization_params['edge_attr_set_mean']
+    edge_attr_set_std = normalization_params['edge_attr_set_std']
 
     with torch.no_grad():
         for batch in test_loader:
