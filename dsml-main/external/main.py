@@ -45,7 +45,7 @@ MEASUREMENT_RATE = 0.5
 SEED = 15
 
 # Model Parameters
-MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'mlp_dsse', 'ensemble_gat_dsse'
+MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'mlp_dsse', 'ensemble_gat_dsse', 'bi_level_gat_dsse'
 EPOCHS = 20
 BATCH_SIZE = 64
 

@@ -16,6 +16,7 @@ from src.robusttest.core.SE.gat_dsse import GAT_DSSE_Lightning
 from src.robusttest.core.SE.mlp_dsse import MLP_DSSE_Lightning
 from src.robusttest.core.SE.gnn_dsse import GCN_DSSE_Lightning
 from src.robusttest.core.SE.ensemble_gat_dsse import EnsembleGAT_DSSE
+from src.robusttest.core.SE.bi_level_gat_dsse import BiLevelGAT_DSSE_Lightning
 from src.robusttest.core.SE.baseline_state_estimation import BaselineStateEstimation
 from external.loss import wls_loss, physical_loss, wls_and_physical_loss
 
@@ -213,6 +214,20 @@ def get_model_config(model_str, num_bus):
             'dropout_rate': 0.0,
             'L': 5,
             'lr': 1e-2,
+        },
+        'bi_level_gat_dsse': {
+            'num_nfeat': 8,
+            'dim_nodes': 11,
+            'dim_lines': 6,
+            'dim_out': 2,
+            'dim_hid': 32,
+            'dim_dense': 32,
+            'gnn_layers': 5,
+            'heads': 1,
+            'K': 2,
+            'dropout_rate': 0.0,
+            'L': 5,
+            'lr': 1e-2,
         }
     }
     return configs.get(model_str, configs['gat_dsse'])
@@ -274,6 +289,13 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
         )
         train_dataloader = model.train_dataloader()
         val_dataloader = DataLoader(val_dataloader.dataset[:30], batch_size=1, shuffle=False)
+
+    elif model_str == 'bi_level_gat_dsse':
+        model = BiLevelGAT_DSSE_Lightning(
+            hyperparameters, x_set_mean, x_set_std,
+            edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
+            time_info=True, loss_type=loss_type, loss_kwargs=loss_kwargs
+        )
 
     else:
         raise ValueError(f"Unknown model type: {model_str}")
