@@ -48,10 +48,16 @@ MEASUREMENT_RATE = 0.5
 SEED = 15
 
 # Model Parameters
-MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'gat_dsse_mse', 'mlp_dsse', 'mlp_dsse_mse'
+MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'mlp_dsse', 'ensemble_gat_dsse'
 EPOCHS = 100
 BATCH_SIZE = 64
-USE_MSE_LOSS = False  # Set True to use MSE loss instead of physics-based loss
+
+# Loss Configuration
+LOSS_TYPE = 'combined'  # Options: 'gsp_wls', 'wls', 'physical', 'combined', 'mse'
+LOSS_KWARGS = {
+    'lambda_wls': 1.0,        # Weight for WLS loss component
+    'lambda_physical': 1.0,   # Weight for physical constraint loss component
+}
 
 # Regularization Coefficients
 REG_COEFS = {
@@ -147,6 +153,10 @@ logger.info("MODEL TRAINING")
 logger.info("="*80)
 
 logger.info(f"Training {MODEL_TYPE.upper()} model...")
+logger.info(f"Loss type: {LOSS_TYPE}")
+if LOSS_TYPE == 'combined':
+    logger.info(f"Lambda WLS: {LOSS_KWARGS['lambda_wls']}")
+    logger.info(f"Lambda Physical: {LOSS_KWARGS['lambda_physical']}")
 logger.info(f"Epochs: {EPOCHS}")
 logger.info(f"Device: {device}")
 logger.info("This may take several minutes...")
@@ -164,7 +174,8 @@ trainer, model = train_se_methods(
     model_str=MODEL_TYPE,
     epochs=EPOCHS,
     save_path=str(MODEL_DIR),
-    use_mse_loss=USE_MSE_LOSS
+    loss_type=LOSS_TYPE,
+    loss_kwargs=LOSS_KWARGS
 )
 
 logger.info("Model training completed!")
@@ -208,7 +219,7 @@ logger.info("="*80)
 logger.info("LOSS COMPONENTS ANALYSIS")
 logger.info("="*80)
 
-if not USE_MSE_LOSS:
+if LOSS_TYPE != 'mse':
     logger.info("Analyzing WLS and physical loss components...")
 
     # Evaluate loss components on test set
@@ -312,7 +323,9 @@ logger.info("DSML Pipeline completed successfully!")
 logger.info("Summary:")
 logger.info(f"Grid: {GRID_CODE}")
 logger.info(f"Model: {MODEL_TYPE.upper()}")
-logger.info(f"Loss type: {'MSE' if USE_MSE_LOSS else 'Physics-based (WLS + Physical)'}")
+logger.info(f"Loss type: {LOSS_TYPE}")
+if LOSS_TYPE == 'combined':
+    logger.info(f"Loss weights: WLS={LOSS_KWARGS['lambda_wls']}, Physical={LOSS_KWARGS['lambda_physical']}")
 logger.info(f"Training epochs: {EPOCHS}")
 logger.info(f"Measurement rate: {MEASUREMENT_RATE}")
 logger.info(f"Test samples: {len(test_results_df)}")
@@ -323,8 +336,9 @@ logger.info(f"Datasets: {dataset_save_path}")
 logger.info(f"Model: {MODEL_DIR / MODEL_TYPE}")
 logger.info(f"Plot: {plot_path}")
 logger.info("Features:")
-logger.info(f"- Enhanced loss functions with WLS and physical constraints")
-logger.info(f"- Configurable MSE vs Physics-based loss")
+logger.info(f"- PyTorch-style configurable loss functions")
+logger.info(f"- Support for WLS, physical, combined, and MSE losses")
+logger.info(f"- Configurable lambda weights for combined loss")
 logger.info(f"- Detailed loss component analysis")
 logger.info(f"- CPU-optimized execution")
 logger.info("All steps completed successfully!")

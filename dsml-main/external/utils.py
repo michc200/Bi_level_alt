@@ -220,7 +220,7 @@ def get_model_config(model_str, num_bus):
 
 def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_std,
                     edge_attr_set_mean, edge_attr_set_std, reg_coefs, model_str='gat_dsse',
-                    epochs=50, save_path='', use_mse_loss=False):
+                    epochs=50, save_path='', loss_type='gsp_wls', loss_kwargs=None):
     """
     Train state estimation methods with specified parameters.
 
@@ -234,7 +234,8 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
         model_str: Model type ('gat_dsse', 'mlp_dsse', etc.)
         epochs: Number of training epochs
         save_path: Path to save model
-        use_mse_loss: Whether to use MSE loss instead of physics-based loss
+        loss_type: Type of loss function ('gsp_wls', 'wls', 'physical', 'combined', 'mse')
+        loss_kwargs: Additional loss function arguments (e.g., lambda weights for combined loss)
 
     Returns:
         trainer, model: Trained PyTorch Lightning trainer and model
@@ -242,19 +243,18 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
     num_bus = len(net.bus)
     hyperparameters = get_model_config(model_str, num_bus)
 
-    # Determine if MSE loss should be used
-    use_mse = use_mse_loss or model_str.endswith('_mse')
-
-    logger.info(f"Creating {model_str} model with {'MSE' if use_mse else 'Physics-based'} loss")
+    logger.info(f"Creating {model_str} model with {loss_type} loss")
 
     if model_str.startswith('gat_dsse'):
         model = GAT_DSSE_Lightning(
             hyperparameters, x_set_mean, x_set_std,
             edge_attr_set_mean, edge_attr_set_std, reg_coefs,
-            time_info=True, use_mse_loss=use_mse
+            time_info=True, loss_type=loss_type, loss_kwargs=loss_kwargs
         )
 
     elif model_str.startswith('mlp_dsse'):
+        # MLP DSSE still uses the old use_mse_loss parameter (would need similar updates)
+        use_mse = loss_type == 'mse'
         model = MLP_DSSE_Lightning(
             hyperparameters, x_set_mean, x_set_std,
             edge_attr_set_mean, edge_attr_set_std, reg_coefs,
@@ -262,6 +262,8 @@ def train_se_methods(net, train_dataloader, val_dataloader, x_set_mean, x_set_st
         )
 
     elif model_str == 'ensemble_gat_dsse':
+        # Ensemble GAT DSSE still uses the old use_mse_loss parameter (would need similar updates)
+        use_mse = loss_type == 'mse'
         model = EnsembleGAT_DSSE(
             hyperparameters, x_set_mean, x_set_std,
             edge_attr_set_mean, edge_attr_set_std, reg_coefs,

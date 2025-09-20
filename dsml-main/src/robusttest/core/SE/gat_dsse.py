@@ -10,13 +10,19 @@ from torch.nn import LeakyReLU, Linear
 import torch.nn.functional as F
 from torch.nn import Module
 from robusttest.core.SE.pf_funcs import gsp_wls_edge, compute_wls_loss, compute_physical_loss
+
+# Add path for external loss functions
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
+from external.loss import wls_loss, physical_loss, wls_and_physical_loss
 import logging
 from torch.nn.functional import mse_loss  # Import MSE loss function
 
 logger = logging.getLogger("GAT_DSSE")
 
 class GAT_DSSE_Lightning(pl.LightningModule):
-    def __init__(self, hyperparameters, x_mean, x_std, edge_mean, edge_std, reg_coefs, time_info = True, use_mse_loss=False):
+    def __init__(self, hyperparameters, x_mean, x_std, edge_mean, edge_std, reg_coefs, time_info = True, loss_type='gsp_wls', loss_kwargs=None):
         super().__init__()
         
         self.save_hyperparameters()
@@ -54,7 +60,10 @@ class GAT_DSSE_Lightning(pl.LightningModule):
         self.num_efeat = hyperparameters['dim_lines']
         self.lr = hyperparameters['lr']
         self.time_info = time_info
-        self.use_mse_loss = use_mse_loss  # Flag to toggle MSE loss
+
+        # Loss configuration
+        self.loss_type = loss_type  # Options: 'gsp_wls', 'wls', 'physical', 'combined', 'mse'
+        self.loss_kwargs = loss_kwargs if loss_kwargs is not None else {}
 
         # Loss tracker
         self.train_loss = []
@@ -100,14 +109,8 @@ class GAT_DSSE_Lightning(pl.LightningModule):
                       edge_input)
 
         # x_nodes = x[:,:self.num_nfeat]
-        
-        if self.use_mse_loss:
-            output[:,0:1] = output[:,0:1] * self.x_std[:1] + self.x_mean[:1]
-            output[:, 1:] = output[:, 1:] * self.x_std[2:3] + self.x_mean[2:3] #* self.x_std[2:3] + self.x_mean[2:3]
-            output[:, 1:] *= (1.- node_param[:,1:2])
-            loss = mse_loss(output, y)  # MSE loss with batch.y as target
-        else: 
-            loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples)
+
+        loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
 
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
@@ -136,13 +139,7 @@ class GAT_DSSE_Lightning(pl.LightningModule):
 
         # x_nodes = x[:,:self.num_nfeat]
         # Calculate loss based on the selected method
-        if self.use_mse_loss:
-            output[:,0:1] = output[:,0:1] * self.x_std[:1] + self.x_mean[:1]
-            output[:, 1:] = output[:, 1:] * self.x_std[2:3] + self.x_mean[2:3] #* self.x_std[2:3] + self.x_mean[2:3]
-            output[:, 1:] *= (1.- node_param[:,1:2])
-            loss = mse_loss(output, y)  # MSE loss with batch.y as target
-        else: 
-            loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples)
+        loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         return loss
     
@@ -172,15 +169,59 @@ class GAT_DSSE_Lightning(pl.LightningModule):
 
         return v_i, theta_i
 
-    def calculate_loss(self, x, edge_input, output, edge_index, node_param, edge_param, num_samples):
-        """Custom loss function."""
-        return gsp_wls_edge(input = x, edge_input =edge_input, 
-                            output= output, x_mean = self.x_mean,
-                            x_std = self.x_std, edge_mean = self.edge_mean,
-                            edge_std = self.edge_std, edge_index = edge_index,
-                            reg_coefs = self.reg_coefs, num_samples = num_samples,
-                            node_param = node_param, edge_param = edge_param
-        )
+    def calculate_loss(self, x, edge_input, output, edge_index, node_param, edge_param, num_samples, y=None):
+        """Custom loss function with configurable loss types."""
+
+        if self.loss_type == 'mse':
+            # MSE loss requires target values and denormalization
+            if y is None:
+                raise ValueError("Target values (y) are required for MSE loss")
+
+            # Denormalize output
+            output_denorm = output.clone()
+            output_denorm[:, 0:1] = output_denorm[:, 0:1] * self.x_std[:1] + self.x_mean[:1]
+            output_denorm[:, 1:] = output_denorm[:, 1:] * self.x_std[2:3] + self.x_mean[2:3]
+            output_denorm[:, 1:] *= (1. - node_param[:, 1:2])  # Enforce theta_slack = 0
+
+            return mse_loss(output_denorm, y)
+
+        elif self.loss_type == 'gsp_wls':
+            # Original combined loss function
+            return gsp_wls_edge(input=x, edge_input=edge_input,
+                                output=output, x_mean=self.x_mean,
+                                x_std=self.x_std, edge_mean=self.edge_mean,
+                                edge_std=self.edge_std, edge_index=edge_index,
+                                reg_coefs=self.reg_coefs, num_samples=num_samples,
+                                node_param=node_param, edge_param=edge_param)
+
+        elif self.loss_type == 'wls':
+            # WLS loss only
+            return wls_loss(output=output, input=x, edge_input=edge_input,
+                           x_mean=self.x_mean, x_std=self.x_std,
+                           edge_mean=self.edge_mean, edge_std=self.edge_std,
+                           edge_index=edge_index, reg_coefs=self.reg_coefs,
+                           node_param=node_param, edge_param=edge_param)
+
+        elif self.loss_type == 'physical':
+            # Physical loss only
+            return physical_loss(output=output, x_mean=self.x_mean, x_std=self.x_std,
+                                edge_index=edge_index, edge_param=edge_param,
+                                node_param=node_param, reg_coefs=self.reg_coefs)
+
+        elif self.loss_type == 'combined':
+            # Combined loss with configurable weights
+            lambda_wls = self.loss_kwargs.get('lambda_wls', 1.0)
+            lambda_physical = self.loss_kwargs.get('lambda_physical', 1.0)
+
+            return wls_and_physical_loss(output=output, input=x, edge_input=edge_input,
+                                        x_mean=self.x_mean, x_std=self.x_std,
+                                        edge_mean=self.edge_mean, edge_std=self.edge_std,
+                                        edge_index=edge_index, reg_coefs=self.reg_coefs,
+                                        node_param=node_param, edge_param=edge_param,
+                                        lambda_wls=lambda_wls, lambda_physical=lambda_physical)
+
+        else:
+            raise ValueError(f"Unknown loss_type: {self.loss_type}. Options: 'gsp_wls', 'wls', 'physical', 'combined', 'mse'")
 
     def configure_optimizers(self):
         """Configure the optimizer and learning rate scheduler."""
