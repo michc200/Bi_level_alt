@@ -147,9 +147,6 @@ def switching(grid_ts_instance, rand_topology = False, voltage_level = 'LV'):
     grid_ts_instance.read_time_series_data()
 
     return grid_ts_instance
-
-
-
                 
 def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std, reg_coefs, model_str = 'gat_dsse', epochs = "50" , save_path = ''):
     """Train the state estimation methods."""
@@ -273,7 +270,7 @@ if __name__ == "__main__":
         'lam_reg':  0.8,
     } 
 
-    EPOCHS = 100
+    EPOCHS = 1
     
     # Grid and Baseline creation
     grid_time_series_folder = "dsml-data/grid-time-series"

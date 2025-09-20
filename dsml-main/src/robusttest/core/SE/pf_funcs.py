@@ -70,7 +70,6 @@ def get_pflow(y, edge_index, node_param, edge_param, phase_shift=True):
 
     return loading_lines, loading_trafo, P_ij_from, Q_ij_from, P_ij_to, Q_ij_to, I_ij_from, I_ij_to  # loading in %, P in MW, Q in MVAr, I in kA
 
-
 def gsp_wls_edge(input, edge_input, output, x_mean, x_std, edge_mean, edge_std, edge_index, reg_coefs, num_samples, node_param, edge_param):
     
     total_nodes =input.shape[0]
@@ -137,4 +136,80 @@ def gsp_wls_edge(input, edge_input, output, x_mean, x_std, edge_mean, edge_std, 
     J_reg = J +  J_v +  J_theta +  J_loading # [1,1]
     
     return J_reg
-    
+
+def compute_wls_loss(input, edge_input, output, x_mean, x_std, edge_mean, edge_std, edge_index, reg_coefs, node_param, edge_param):
+    total_nodes = input.shape[0]
+
+    # Extract normalized states
+    z = input[:, ::2]  # V, theta, P, Q (buses)
+    edge_z = edge_input[:, :4:2]  # Pflow, Qflow (lines)
+    z_mask = z != 0.
+    edge_z_mask = edge_z != 0.
+
+    # Denormalize
+    Z = (z * x_std[::2] + x_mean[::2]) * z_mask
+    edge_Z = (edge_z * edge_std[:4:2] + edge_mean[:4:2]) * edge_z_mask
+
+    # Inverse variances
+    r_inv = input[:, 1::2]
+    r_edge_inv = edge_input[:, 1:4:2]
+    r_mask = r_inv != 0.
+    r_edge_mask = r_edge_inv != 0.
+    R_inv = (r_inv * x_std[1::2] + x_mean[1::2]) * r_mask
+    R_edge_inv = (r_edge_inv * edge_std[1:4:2] + edge_mean[1:4:2]) * r_edge_mask
+
+    # Predicted states
+    v_i = output[:, 0:1] * x_std[:1] + x_mean[:1]
+    theta_i = output[:, 1:] * x_std[2:3] + x_mean[2:3]
+    theta_i *= (1. - node_param[:, 1:2])  # enforce slack bus
+
+    # Flows
+    _, _, p_from, q_from, p_to, q_to, _, _ = get_pflow(
+        torch.concat([v_i, theta_i], axis=1), edge_index, node_param, edge_param, phase_shift=False
+    )
+
+    indices_from, indices_to = edge_index
+    p_i = -scatter(p_to, indices_to, dim_size=total_nodes) - scatter(p_from, indices_from, dim_size=total_nodes)
+    q_i = -scatter(q_to, indices_to, dim_size=total_nodes) - scatter(q_from, indices_from, dim_size=total_nodes)
+
+    # Build measurement residuals
+    h = torch.concatenate([v_i, theta_i, p_i.unsqueeze(1), q_i.unsqueeze(1)], dim=1)
+    h_edge = torch.concatenate([p_from.unsqueeze(1), q_from.unsqueeze(1)], dim=1)
+    delta = Z - h
+    delta_edge = edge_Z - h_edge
+
+    # Weighted Least Squares loss
+    meas_node_weights = torch.tensor([reg_coefs['lam_v'], reg_coefs['lam_v'], reg_coefs['lam_p'], reg_coefs['lam_p']], device=device)
+    meas_edge_weights = torch.tensor([reg_coefs['lam_pf'], reg_coefs['lam_pf']], device=device)
+
+    J_sample = torch.sum(delta**2 * R_inv * meas_node_weights, axis=1)
+    J_sample_edge = torch.sum(delta_edge**2 * R_edge_inv * meas_edge_weights, axis=1)
+
+    J_wls = torch.mean(J_sample) + torch.mean(J_sample_edge[J_sample_edge != 0])
+    return J_wls, v_i, theta_i
+
+def compute_physical_loss(v_i, theta_i, edge_index, edge_param, node_param, reg_coefs):
+    # Compute flows again for physical constraints
+    loading_lines, loading_trafos, p_from, q_from, p_to, q_to, i_from, i_to = get_pflow(
+        torch.concat([v_i, theta_i], axis=1), edge_index, node_param, edge_param, phase_shift=False
+    )
+    loading = loading_lines + loading_trafos
+
+    indices_from, indices_to = edge_index
+    theta_ij = torch.abs(torch.gather(theta_i[:, 0], 0, indices_from) -
+                         torch.gather(theta_i[:, 0], 0, indices_to))
+
+    trafo_pos = (torch.tensor(edge_param[:, 5]) == 0).int()
+
+    # Regularization terms
+    J_v = reg_coefs['lam_reg'] * torch.mean(torch.relu(v_i - 1.1) + torch.relu(0.9 - v_i))**2
+    J_theta = reg_coefs['lam_reg'] * torch.mean(torch.relu(theta_ij * trafo_pos - 0.5))**2
+    J_loading = reg_coefs['lam_reg'] * torch.mean(torch.relu(loading - 1.5))**2
+
+    J_phys = J_v + J_theta + J_loading
+    return J_phys
+
+
+if __name__ == "__main__":
+    pass
+    print("Test")

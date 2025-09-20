@@ -9,7 +9,7 @@ from torch_geometric.nn.pool import avg_pool_neighbor_x
 from torch.nn import LeakyReLU, Linear
 import torch.nn.functional as F
 from torch.nn import Module
-from robusttest.core.SE.pf_funcs import gsp_wls_edge
+from robusttest.core.SE.pf_funcs import gsp_wls_edge, compute_wls_loss, compute_physical_loss
 import logging
 from torch.nn.functional import mse_loss  # Import MSE loss function
 
