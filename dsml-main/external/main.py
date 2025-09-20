@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
-"""
-DSML State Estimation Pipeline
-==============================
-Notebook-style execution with clear sections
-"""
-
 import os
 import warnings
 import logging
+import multiprocessing
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +19,8 @@ from external.utils import (
     no_errors,
     train_se_methods,
     load_or_create_baseline_se,
-    load_or_create_grid_ts
+    load_or_create_grid_ts,
+    evaluate_loss_components
 )
 
 # Suppress warnings
@@ -52,9 +48,10 @@ MEASUREMENT_RATE = 0.9
 SEED = 15
 
 # Model Parameters
-MODEL_TYPE = 'gat_dsse'
+MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'gat_dsse_mse', 'mlp_dsse', 'mlp_dsse_mse'
 EPOCHS = 100
 BATCH_SIZE = 64
+USE_MSE_LOSS = False  # Set True to use MSE loss instead of physics-based loss
 
 # Regularization Coefficients
 REG_COEFS = {
@@ -118,7 +115,7 @@ logger.info("="*80)
 baseline_save_path = BASELINE_SE_DIR / grid_id
 
 # Load or create baseline state estimation
-baseline_se = load_or_create_baseline_se(grid_ts, baseline_save_path, n_jobs=18)
+baseline_se = load_or_create_baseline_se(grid_save_path, baseline_save_path, n_jobs=18)
 
 # Display baseline information
 logger.info("Baseline state estimation loaded!")
@@ -189,7 +186,8 @@ trainer, model = train_se_methods(
     reg_coefs=REG_COEFS,
     model_str=MODEL_TYPE,
     epochs=EPOCHS,
-    save_path=str(MODEL_DIR)
+    save_path=str(MODEL_DIR),
+    use_mse_loss=USE_MSE_LOSS
 )
 
 logger.info("Model training completed!")
@@ -224,6 +222,46 @@ for timestamp, (vm_pu_tensor, va_degree_tensor) in enumerate(test_results):
 logger.info("Evaluation completed!")
 logger.info(f"Test time steps: {len(test_results_df)}")
 logger.info(f"Variables predicted: {len(test_results_df.columns)}")
+
+################################################################################
+#### Loss Components Analysis
+################################################################################
+
+logger.info("="*80)
+logger.info("LOSS COMPONENTS ANALYSIS")
+logger.info("="*80)
+
+if not USE_MSE_LOSS:
+    logger.info("Analyzing WLS and physical loss components...")
+
+    # Evaluate loss components on test set
+    loss_metrics = evaluate_loss_components(
+        model, test_loader,
+        normalization_params['x_set_mean'],
+        normalization_params['x_set_std'],
+        normalization_params['edge_attr_set_mean'],
+        normalization_params['edge_attr_set_std'],
+        REG_COEFS
+    )
+
+    if 'error' not in loss_metrics:
+        logger.info("Loss component analysis completed!")
+        logger.info(f"Average WLS Loss: {loss_metrics['avg_wls_loss']:.6f}")
+        logger.info(f"Average Physical Loss: {loss_metrics['avg_physical_loss']:.6f}")
+        logger.info(f"Total Combined Loss: {loss_metrics['total_loss']:.6f}")
+        logger.info(f"Batches processed: {loss_metrics['num_batches']}")
+
+        # Calculate relative contributions
+        total = loss_metrics['avg_wls_loss'] + loss_metrics['avg_physical_loss']
+        if total > 0:
+            wls_pct = (loss_metrics['avg_wls_loss'] / total) * 100
+            phys_pct = (loss_metrics['avg_physical_loss'] / total) * 100
+            logger.info(f"WLS Loss contribution: {wls_pct:.1f}%")
+            logger.info(f"Physical Loss contribution: {phys_pct:.1f}%")
+    else:
+        logger.warning(f"Loss analysis failed: {loss_metrics['error']}")
+else:
+    logger.info("Loss component analysis skipped (MSE loss mode)")
 
 ################################################################################
 #### Results Visualization
@@ -297,6 +335,7 @@ logger.info("DSML Pipeline completed successfully!")
 logger.info("Summary:")
 logger.info(f"Grid: {GRID_CODE}")
 logger.info(f"Model: {MODEL_TYPE.upper()}")
+logger.info(f"Loss type: {'MSE' if USE_MSE_LOSS else 'Physics-based (WLS + Physical)'}")
 logger.info(f"Training epochs: {EPOCHS}")
 logger.info(f"Measurement rate: {MEASUREMENT_RATE}")
 logger.info(f"Test samples: {len(test_results_df)}")
@@ -305,4 +344,9 @@ logger.info(f"Grid data: {grid_save_path}")
 logger.info(f"Baseline SE: {baseline_save_path}")
 logger.info(f"Model: {MODEL_DIR / MODEL_TYPE}")
 logger.info(f"Plot: {plot_path}")
+logger.info("Features:")
+logger.info(f"- Enhanced loss functions with WLS and physical constraints")
+logger.info(f"- Configurable MSE vs Physics-based loss")
+logger.info(f"- Detailed loss component analysis")
+logger.info(f"- CPU-optimized execution")
 logger.info("All steps completed successfully!")
