@@ -1,0 +1,45 @@
+# DSML Configuration File
+# This file contains all configurable parameters for the DSML pipeline
+
+# Grid Configuration
+grid:
+  code: '1-LV-rural1--0-sw'  # Grid code to use
+  error_type: 'no_errors'    # Type of errors to apply: 'no_errors', 'parameter_errors', 'grid_uncertainty', 'switching'
+  measurement_rate: 0.5      # Measurement rate for buses (0.0 to 1.0)
+
+# Model Configuration
+model:
+  type: 'gat_dsse'          # Model type: 'gat_dsse', 'mlp_dsse', 'gat_dsse_mse', 'mlp_dsse_mse', 'ensemble_gat_dsse'
+  epochs: 100               # Number of training epochs
+  batch_size: 64            # Batch size for training
+
+# Regularization Coefficients
+regularization:
+  mu_v: 1e-1               # Voltage magnitude regularization
+  mu_theta: 1e-1           # Voltage angle regularization
+  lam_v: 1                 # Voltage constraint weight
+  lam_p: 1                 # Power constraint weight
+  lam_pf: 1                # Power flow constraint weight
+  lam_reg: 0.8             # General regularization weight
+
+# Directory Configuration
+directories:
+  base_dir: 'dsml-data'
+  grid_time_series: 'grid-time-series'
+  baseline_se: 'baseline-state-estimation'
+  models: 'dsml-models'
+  plots: 'plots'
+
+# System Configuration
+system:
+  seed: 15                 # Random seed for reproducibility
+  device: 'cpu'            # Device to use: 'cpu', 'cuda', 'mps'
+  n_jobs: 18               # Number of parallel jobs for baseline SE
+
+# Visualization Configuration
+visualization:
+  figure_size: [12, 8]     # Figure size [width, height]
+  dpi: 300                 # DPI for saved plots
+  voltage_limits: [1.0125, 1.0275]  # Y-axis limits for voltage plots
+  save_plots: true         # Whether to save plots to disk
+  show_plots: true         # Whether to display plots

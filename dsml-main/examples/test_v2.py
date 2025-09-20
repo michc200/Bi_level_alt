@@ -1,9 +1,7 @@
-import simbench as sb
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import random
-import multiprocessing
 import torch
 from robusttest.core.grid_time_series import GridTimeSeries
 from robusttest.core.grid_utils.grid_uncertainty import GridUncertainty
@@ -17,11 +15,9 @@ from robusttest.core.SE.ensemble_gat_dsse import EnsembleGAT_DSSE
 from torch_geometric.loader import DataLoader
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping
-import plotly.graph_objects as go
 import logging
 import os
 import warnings
-import pickle
 
 warnings.filterwarnings("ignore")
 
@@ -153,101 +149,9 @@ def switching(grid_ts_instance, rand_topology = False, voltage_level = 'LV'):
     return grid_ts_instance
 
 
-def process_measurement_rates(grid_ts_instance, save_measurement_dataframes = False, models = ['gat_dsse', 'mlp_dsse', 'gcn_dsse']):
-    """Process measurement rates and save results."""
-    # for measurement_rate, lam_p, lam_pf in zip([0.05, 0.1, 0.2, 0.5, 0.9], [1, 1, 1, 1, 1], [1, 1, 1, 1, 1]): # 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.9, [3, 5, 10, 20, 40], [100, 100, 100, 100, 100]
-    for measurement_rate, lam_p, lam_pf in zip([0.9], [1], [1]): 
-        grid_ts_instance.create_measurements_ts(bus_measurement_rate=measurement_rate)
-        save_path_meas = f"measurement_rate_{measurement_rate}"
-        if save_measurement_dataframes:
-            grid_ts_instance.save_measurement_dataframes(save_path_meas)
-
-        grid_ts_instance.save_state(filepath= save_path_meas)
-
-        grid_ts_instance.random_seed_measurements = None
-
-        # Create a baseline state estimation for these measurements
-        baseline_se = BaselineStateEstimation(grid_ts_instance)
-        baseline_se_result_df = baseline_se.run_parallel_state_estimation(n_jobs=18)
-        basline_filepath = f"{grid_ts_instance.save_path}/{save_path_meas}/baseline_se_results.csv"
-        os.makedirs(os.path.dirname(basline_filepath), exist_ok=True)
-        baseline_se_result_df.to_csv(basline_filepath, index=False)
-
-        train_data, val_data, test_data, x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = grid_ts_instance.create_pyg_data(baseline_se_result_df)
-
-        x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = (x_set_mean.to(device), x_set_std.to(device), edge_attr_set_mean.to(device), edge_attr_set_std.to(device))
-
-        test_start = int(len(train_data) + len(val_data))
-        test_baseline = baseline_se_result_df[test_start:]
-        test_measurements = grid_ts_instance.measurements_bus_ts_df[test_start:]
-        test_results_true = grid_ts_instance.values_bus_ts_df[test_start:]
-
-        mu_v = 1e-1
-        reg_coefs = { # TODO: this will need to be editted for the bi level loss
-        'mu_v': mu_v,
-        'mu_theta': mu_v,
-        'lam_v': 1, #1e-4,
-        'lam_p': lam_p, #1e-8,
-        'lam_pf': lam_pf, #1e-6,
-        'lam_reg': 0.8,
-        }
-
-        # Train the state estimation methods
-        for model_str in models:
-            train_loader = DataLoader(train_data, batch_size=64, shuffle=True)
-            val_loader = DataLoader(val_data, batch_size=64, shuffle=True)
-            test_loader = DataLoader(test_data, batch_size=1, shuffle=False)
-            logger.info(f"Training {model_str} will be saved to {grid_ts_instance.save_path}/{save_path_meas}/{model_str}")
-            trainer, model = train_se_methods(grid_ts_instance.net, train_loader, val_loader, x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std, reg_coefs, model_str, f"{grid_ts_instance.save_path}/{save_path_meas}")
-            test_results = trainer.predict(model, test_loader)
-            test_results_df = pd.DataFrame() 
-            for timestamp, (vm_pu_tensor, va_degree_tensor) in enumerate(test_results):
-                vm_pu = vm_pu_tensor.squeeze().tolist()
-                va_degree = va_degree_tensor.squeeze().tolist()
-                
-                # For each bus, add the data to the DataFrame
-                for i in range(len(vm_pu)):
-                    bus_id = grid_ts_instance.net.bus.index[i]
-                    test_results_df.loc[timestamp, f"bus_{bus_id}_vm_pu"] = vm_pu[i]
-                    test_results_df.loc[timestamp, f"bus_{bus_id}_va_degree"] = va_degree[i] * (180 / np.pi)
-
-            test_results_df.to_csv(f"{grid_ts_instance.save_path}/{save_path_meas}/{model_str}_se_results.csv", index=False)
-
-            # Extract x values (bus indices)
-            x_values = grid_ts_instance.net.bus.index
-
-            # Extract y values for each trace
-            y_measurements = [test_measurements.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-            y_results_true = [test_results_true.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-            y_baseline = [test_baseline.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-            y_model = [test_results_df.loc[0, f'bus_{bus}_vm_pu'] for bus in x_values]
-
-            # Create the figure and axes
-            fig, ax = plt.subplots(figsize=(10, 6))
-
-            # Plot each trace
-            ax.scatter(x_values, y_measurements, label='measurements', marker='o', color='blue')
-            ax.plot(x_values, y_results_true, label='results', color='orange', linestyle='-')
-            ax.plot(x_values, y_baseline, label='wls_dsse', color='green', linestyle='-')
-            ax.plot(x_values, y_model, label=model_str, color='red', linestyle='-')
-
-            # Set y-axis limits
-            ax.set_ylim([1.0125, 1.0275])
-
-            # Add labels, legend, and title
-            ax.set_xlabel('Bus Index')
-            ax.set_ylabel('Voltage Magnitude (pu)')
-            ax.set_title('State Estimation Results')
-            ax.legend()
-
-            # Save the figure
-            save_path = f"{grid_ts_instance.save_path}/{save_path_meas}/{model_str}_se_results.png"
-            plt.savefig(save_path)
-
 
                 
-
-def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std, reg_coefs, model_str = 'gat_dsse', save_path = ''):
+def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std, reg_coefs, model_str = 'gat_dsse', epochs = "50" , save_path = ''):
     """Train the state estimation methods."""
     
     num_bus = len(net.bus)
@@ -337,17 +241,10 @@ def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_s
         train_dataloader = model.train_dataloader()
         val_dataloader = DataLoader(val_dataloader.dataset[:30], batch_size=1, shuffle=False)
 
-    # early_stopping_callback = EarlyStopping(
-    # monitor='val_loss',    # Metric to monitor
-    # patience=30,           # Number of epochs with no improvement to stop
-    # verbose=False,          # Whether to log messages
-    # mode='min'             # Stop when the monitored metric stops decreasing
-    # )
-
     # Use the custom callback in the trainer
     trainer = Trainer( # TODO: we will need to use a custom trainer
-        max_epochs=150,
-        accelerator=accelerator # TODO: revert back to 150
+        max_epochs = epochs,
+        accelerator = accelerator # TODO: revert back to 150
         # callbacks=[early_stopping_callback],
     )
     trainer.fit(model, train_dataloader, val_dataloader)
@@ -361,14 +258,27 @@ def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_s
 if __name__ == "__main__":
     # Collect all LV grid codes
     logger.info(f'Device: {device}')
-    multiprocessing.freeze_support()
 
     GRID = '1-LV-rural1--0-sw' # '1-MV-urban--0-sw'
-    MODEL = 'gat_dsse'
-    MEAS_RATE = 0.9
+    ERRORS = 'no_errors'
+    MEAS_RATE = 0.5
 
+    MODEL = 'gat_dsse'
+    REG_COEFS = {
+        'mu_v':     1e-1,
+        'mu_theta': 1e-1,
+        'lam_v':    1, #1e-4,
+        'lam_p':    1, #1e-8,
+        'lam_pf':   1, #1e-6,
+        'lam_reg':  0.8,
+    } 
+
+    EPOCHS = 100
+    
+    # Grid and Baseline creation
     grid_time_series_folder = "dsml-data/grid-time-series"
     baseline_state_estimation_folder = "dsml-data/basline-state-estimation"
+    model_folder = "dsml-model/"
     
     if not os.path.exists(grid_time_series_folder):
         os.makedirs(grid_time_series_folder)
@@ -376,17 +286,19 @@ if __name__ == "__main__":
     if not os.path.exists(baseline_state_estimation_folder):
         os.makedirs(baseline_state_estimation_folder)
 
-    grid_save_path = f"{grid_time_series_folder}/{GRID}"
+    grid_id = f"GRID-{GRID}__MEAS_RATE-{MEAS_RATE}__ERROR-{ERRORS}__SEED-{SEED}"
+    grid_save_path = f"{grid_time_series_folder}/{grid_id}"
     if not os.path.exists(grid_save_path):
         grid_ts = GridTimeSeries(GRID)
         grid_ts = no_errors(grid_ts)
-        grid_ts.create_measurements_ts( bus_measurement_rate = MEAS_RATE)
+        grid_ts.create_measurements_ts(bus_measurement_rate = MEAS_RATE)
         grid_ts.save(grid_save_path)
     
     else:
         grid_ts = GridTimeSeries.load(grid_save_path)
     
-    baseline_se_save_path = f"{baseline_state_estimation_folder}/{GRID}"
+    baseline_se_id = f"GRID-{GRID}__MEAS_RATE-{MEAS_RATE}__ERROR-{ERRORS}__SEED-{SEED}"
+    baseline_se_save_path = f"{baseline_state_estimation_folder}/{baseline_se_id}"
     if not os.path.exists(baseline_se_save_path):
         baseline_se = BaselineStateEstimation(grid_ts)
         baseline_se.run_parallel_state_estimation(n_jobs=18)
@@ -395,28 +307,60 @@ if __name__ == "__main__":
     else:
         baseline_se = BaselineStateEstimation.load(baseline_se_save_path)
 
+    # Datasets
     train_data, val_data, test_data, x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = grid_ts.create_pyg_data(baseline_se.baseline_se_results_df)
-    pass
-    # for code in grid_codes[15:]:
-    # for code in ['1-MV-urban--0-sw']: # this is the code arbel wanted us to use
-    # for code in ['1-MV-urban--0-sw']: # arbitrary LV grid
-    #     save_path = f"{code}"
-    #     logger.info(f"Processing {voltage_level} grid: {code}")
+    x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = (x_set_mean.to(device), x_set_std.to(device), edge_attr_set_mean.to(device), edge_attr_set_std.to(device))
+    
+    test_start = int(len(train_data) + len(val_data))
+    test_baseline = baseline_se.baseline_se_results_df[test_start:]
+    test_measurements = grid_ts.measurements_bus_ts_df[test_start:]
+    test_results_true = grid_ts.values_bus_ts_df[test_start:]
+    
+    train_loader = DataLoader(train_data, batch_size=64, shuffle=True)
+    val_loader = DataLoader(val_data, batch_size=64, shuffle=True)
+    test_loader = DataLoader(test_data, batch_size=1, shuffle=False)
+    
+    # Train
+    trainer, model = train_se_methods(grid_ts.net, train_loader, val_loader, x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std, REG_COEFS, MODEL, EPOCHS, f"{model_folder}")
+    
+    # Evaluate
+    test_results = trainer.predict(model, test_loader)
+    test_results_df = pd.DataFrame() 
+    for timestamp, (vm_pu_tensor, va_degree_tensor) in enumerate(test_results):
+        vm_pu = vm_pu_tensor.squeeze().tolist()
+        va_degree = va_degree_tensor.squeeze().tolist()
+        
+        # For each bus, add the data to the DataFrame
+        for i in range(len(vm_pu)):
+            bus_id = grid_ts.net.bus.index[i]
+            test_results_df.loc[timestamp, f"bus_{bus_id}_vm_pu"] = vm_pu[i]
+            test_results_df.loc[timestamp, f"bus_{bus_id}_va_degree"] = va_degree[i] * (180 / np.pi)
 
-    #     # Run the three cases
-    #     # for case_fn in [ parameter_errors, grid_uncertainty,]: # switching,no_errors, switching
-    #     for case_fn in [no_errors]: # switching,no_errors, switching
-    #         # models = ['gat_dsse', 'gat_dsse_mse', 'mlp_dsse', 'mlp_dsse_mse'] #, 'gcn_dsse' # overwrite with models = ['gat_dsse']
-    #         models = ['gat_dsse']
-    #         if case_fn.__name__ == 'switching':
-    #             models.append('ensemble_gat_dsse')
-                
-    #         logger.info(f"Started processing {voltage_level} grid: {code} in case {case_fn.__name__}")
-    #         save_path = f"{voltage_level}/{code}"
-    #         save_path = f"{save_path}/{case_fn.__name__}"
-            
-    #         grid_ts_instance.save_state()
-    #         grid_ts_instance = case_fn(grid_ts_instance)
-    #         process_measurement_rates(grid_ts_instance, save_measurement_dataframes= False, models = models)
+    x_values = grid_ts.net.bus.index
 
-    #         logger.info(f"Finished processing {voltage_level} grid: {code} in case {case_fn.__name__}")
+    # Extract y values for each trace
+    y_measurements = [test_measurements.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
+    y_results_true = [test_results_true.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
+    y_baseline = [test_baseline.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
+    y_model = [test_results_df.loc[0, f'bus_{bus}_vm_pu'] for bus in x_values]
+
+    # Create the figure and axes
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Plot each trace
+    ax.scatter(x_values, y_measurements, label='measurements', marker='o', color='blue')
+    ax.plot(x_values, y_results_true, label='results', color='orange', linestyle='-')
+    ax.plot(x_values, y_baseline, label='wls_dsse', color='green', linestyle='-')
+    ax.plot(x_values, y_model, label= MODEL , color='red', linestyle='-')
+
+    # Set y-axis limits
+    ax.set_ylim([1.0125, 1.0275])
+
+    # Add labels, legend, and title
+    ax.set_xlabel('Bus Index')
+    ax.set_ylabel('Voltage Magnitude (pu)')
+    ax.set_title('State Estimation Results')
+    ax.legend()
+    plt.show()
+    
+
