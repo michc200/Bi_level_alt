@@ -19,7 +19,6 @@ from external.utils import (
     train_se_methods,
     load_or_create_baseline_se,
     load_or_create_grid_ts,
-    evaluate_loss_components,
     load_or_create_datasets_and_loaders
 )
 
@@ -140,7 +139,7 @@ logger.info("DATASET CREATION")
 logger.info("="*80)
 
 # Create datasets and data loaders
-train_loader, val_loader, test_loader, normalization_params = load_or_create_datasets_and_loaders(
+train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data = load_or_create_datasets_and_loaders(
     grid_ts, baseline_se, BATCH_SIZE, device, dataset_save_path
 )
 
@@ -154,12 +153,8 @@ logger.info("="*80)
 
 logger.info(f"Training {MODEL_TYPE.upper()} model...")
 logger.info(f"Loss type: {LOSS_TYPE}")
-if LOSS_TYPE == 'combined':
-    logger.info(f"Lambda WLS: {LOSS_KWARGS['lambda_wls']}")
-    logger.info(f"Lambda Physical: {LOSS_KWARGS['lambda_physical']}")
 logger.info(f"Epochs: {EPOCHS}")
 logger.info(f"Device: {device}")
-logger.info("This may take several minutes...")
 
 # Train the model
 trainer, model = train_se_methods(
@@ -210,46 +205,6 @@ for timestamp, (vm_pu_tensor, va_degree_tensor) in enumerate(test_results):
 logger.info("Evaluation completed!")
 logger.info(f"Test time steps: {len(test_results_df)}")
 logger.info(f"Variables predicted: {len(test_results_df.columns)}")
-
-################################################################################
-#### Loss Components Analysis
-################################################################################
-
-logger.info("="*80)
-logger.info("LOSS COMPONENTS ANALYSIS")
-logger.info("="*80)
-
-if LOSS_TYPE != 'mse':
-    logger.info("Analyzing WLS and physical loss components...")
-
-    # Evaluate loss components on test set
-    loss_metrics = evaluate_loss_components(
-        model, test_loader,
-        normalization_params['x_set_mean'],
-        normalization_params['x_set_std'],
-        normalization_params['edge_attr_set_mean'],
-        normalization_params['edge_attr_set_std'],
-        REG_COEFS
-    )
-
-    if 'error' not in loss_metrics:
-        logger.info("Loss component analysis completed!")
-        logger.info(f"Average WLS Loss: {loss_metrics['avg_wls_loss']:.6f}")
-        logger.info(f"Average Physical Loss: {loss_metrics['avg_physical_loss']:.6f}")
-        logger.info(f"Total Combined Loss: {loss_metrics['total_loss']:.6f}")
-        logger.info(f"Batches processed: {loss_metrics['num_batches']}")
-
-        # Calculate relative contributions
-        total = loss_metrics['avg_wls_loss'] + loss_metrics['avg_physical_loss']
-        if total > 0:
-            wls_pct = (loss_metrics['avg_wls_loss'] / total) * 100
-            phys_pct = (loss_metrics['avg_physical_loss'] / total) * 100
-            logger.info(f"WLS Loss contribution: {wls_pct:.1f}%")
-            logger.info(f"Physical Loss contribution: {phys_pct:.1f}%")
-    else:
-        logger.warning(f"Loss analysis failed: {loss_metrics['error']}")
-else:
-    logger.info("Loss component analysis skipped (MSE loss mode)")
 
 ################################################################################
 #### Results Visualization
@@ -339,6 +294,6 @@ logger.info("Features:")
 logger.info(f"- PyTorch-style configurable loss functions")
 logger.info(f"- Support for WLS, physical, combined, and MSE losses")
 logger.info(f"- Configurable lambda weights for combined loss")
-logger.info(f"- Detailed loss component analysis")
 logger.info(f"- CPU-optimized execution")
+logger.info(f"- Modular dataset caching and reuse")
 logger.info("All steps completed successfully!")

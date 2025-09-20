@@ -313,30 +313,57 @@ def evaluate_loss_components(model, test_loader, x_set_mean, x_set_std,
 
     with torch.no_grad():
         for batch in test_loader:
-            # Forward pass
-            output = model(batch.x, batch.edge_index, batch.edge_attr)
-
             # Extract batch components
             x = batch.x
             edge_attr = batch.edge_attr
             edge_index = batch.edge_index
+
+            # Process input like in training step
+            x_nodes = x[:, :model.num_nfeat]
+            x_nodes_gnn = x_nodes.clone()
+
+            # Add time info if enabled
+            if model.time_info:
+                time_info = x[:, model.num_nfeat+3:]
+                x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
+
+            edge_input = edge_attr[:, :model.num_efeat]
+
+            # Forward pass with processed input
+            output = model(x_nodes_gnn, edge_index, edge_input)
 
             # Get node and edge parameters
             node_param = x[:, model.num_nfeat:model.num_nfeat+3]
             edge_param = edge_attr[:, model.num_efeat:]
 
             try:
-                # Compute WLS loss
-                wls_loss_val = wls_loss(
-                    output, x[:, :model.num_nfeat], edge_attr[:, :model.num_efeat],
-                    x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std,
-                    edge_index, reg_coefs, node_param, edge_param
-                )
+                # Get num_samples like in training
+                num_samples = batch.batch[-1] + 1 if hasattr(batch, 'batch') else 1
 
-                # Compute physical loss
-                phys_loss = physical_loss(
-                    output, x_set_mean, x_set_std, edge_index, edge_param, node_param, reg_coefs
-                )
+                # Use the model's calculate_loss method but override to get components
+                if model.loss_type == 'combined' or model.loss_type == 'gsp_wls':
+                    # For combined/gsp_wls, compute WLS and physical separately for analysis
+                    wls_loss_val = wls_loss(
+                        output, x_nodes, edge_input,
+                        x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std,
+                        edge_index, reg_coefs, node_param, edge_param
+                    )
+
+                    phys_loss = physical_loss(
+                        output, x_set_mean, x_set_std, edge_index, edge_param, node_param, reg_coefs
+                    )
+                elif model.loss_type == 'wls':
+                    # Only WLS loss
+                    wls_loss_val = model.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples)
+                    phys_loss = torch.tensor(0.0)
+                elif model.loss_type == 'physical':
+                    # Only physical loss
+                    wls_loss_val = torch.tensor(0.0)
+                    phys_loss = model.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples)
+                else:
+                    # For MSE or other losses, skip component analysis
+                    logger.warning(f"Loss component analysis not supported for loss_type: {model.loss_type}")
+                    continue
 
                 total_wls_loss += wls_loss_val.item()
                 total_phys_loss += phys_loss.item()
@@ -431,7 +458,7 @@ def load_or_create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device
         dataset_save_path: Optional path to save/load dataset
 
     Returns:
-        tuple: (train_loader, val_loader, test_loader, normalization_params)
+        tuple: (train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data)
     """
     if dataset_save_path:
         train_data, val_data, test_data, normalization_params = load_or_create_datasets(
@@ -477,4 +504,4 @@ def load_or_create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device
     logger.info(f"Training batches: {len(train_loader)}")
     logger.info(f"Validation batches: {len(val_loader)}")
 
-    return train_loader, val_loader, test_loader, normalization_params
+    return train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data
