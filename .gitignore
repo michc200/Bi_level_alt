@@ -2,4 +2,7 @@ dsml-env
 LV
 lightning_logs
 dsml-data
+dsml-models
+plots
 None
+*.ckpt

@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import torch
-from torch_geometric.loader import DataLoader
 
 # Add parent directory to path for imports
 import sys
@@ -20,7 +19,8 @@ from external.utils import (
     train_se_methods,
     load_or_create_baseline_se,
     load_or_create_grid_ts,
-    evaluate_loss_components
+    evaluate_loss_components,
+    load_or_create_datasets_and_loaders
 )
 
 # Suppress warnings
@@ -44,7 +44,7 @@ device = torch.device('cpu')
 # Grid Parameters
 GRID_CODE = '1-LV-rural1--0-sw'
 ERROR_TYPE = 'no_errors'
-MEASUREMENT_RATE = 0.9
+MEASUREMENT_RATE = 0.5
 SEED = 15
 
 # Model Parameters
@@ -63,15 +63,17 @@ REG_COEFS = {
     'lam_reg': 0.8,
 }
 
-# Directory Setup
-BASE_DIR = Path("../dsml-data")
+# Directory Setup (relative to main.py location)
+SCRIPT_DIR = Path(__file__).parent.resolve().parent.resolve()
+BASE_DIR = SCRIPT_DIR.parent / "dsml-data"
 GRID_TS_DIR = BASE_DIR / "grid-time-series"
 BASELINE_SE_DIR = BASE_DIR / "baseline-state-estimation"
-MODEL_DIR = Path("../dsml-models")
-PLOTS_DIR = Path("../plots")
+DATASET_DIR = BASE_DIR / "datasets"
+MODEL_DIR = SCRIPT_DIR.parent / "dsml-models"
+PLOTS_DIR = SCRIPT_DIR.parent / "plots"
 
 # Create directories
-for directory in [GRID_TS_DIR, BASELINE_SE_DIR, MODEL_DIR, PLOTS_DIR]:
+for directory in [GRID_TS_DIR, BASELINE_SE_DIR, DATASET_DIR, MODEL_DIR, PLOTS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 # Set random seeds
@@ -111,8 +113,9 @@ logger.info("="*80)
 logger.info("BASELINE STATE ESTIMATION")
 logger.info("="*80)
 
-# Use same identifier for baseline
+# Use same identifier for baseline and dataset
 baseline_save_path = BASELINE_SE_DIR / grid_id
+dataset_save_path = DATASET_DIR / f"{grid_id}.pkl"
 
 # Load or create baseline state estimation
 baseline_se = load_or_create_baseline_se(grid_save_path, baseline_save_path, n_jobs=18)
@@ -130,36 +133,10 @@ logger.info("="*80)
 logger.info("DATASET CREATION")
 logger.info("="*80)
 
-logger.info("Creating PyTorch Geometric datasets...")
-
-# Create datasets from grid and baseline data
-datasets = grid_ts.create_pyg_data(baseline_se.baseline_se_results_df)
-train_data, val_data, test_data = datasets[:3]
-x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = datasets[3:]
-
-# Move normalization parameters to device
-normalization_params = {
-    'x_set_mean': x_set_mean.to(device),
-    'x_set_std': x_set_std.to(device),
-    'edge_attr_set_mean': edge_attr_set_mean.to(device),
-    'edge_attr_set_std': edge_attr_set_std.to(device)
-}
-
-logger.info("Datasets created successfully!")
-logger.info(f"Training samples: {len(train_data)}")
-logger.info(f"Validation samples: {len(val_data)}")
-logger.info(f"Test samples: {len(test_data)}")
-
-# Create data loaders
-logger.info("Creating data loaders...")
-train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
-val_loader = DataLoader(val_data, batch_size=BATCH_SIZE, shuffle=True)
-test_loader = DataLoader(test_data, batch_size=1, shuffle=False)
-
-logger.info("Data loaders created!")
-logger.info(f"Batch size: {BATCH_SIZE}")
-logger.info(f"Training batches: {len(train_loader)}")
-logger.info(f"Validation batches: {len(val_loader)}")
+# Create datasets and data loaders
+train_loader, val_loader, test_loader, normalization_params = load_or_create_datasets_and_loaders(
+    grid_ts, baseline_se, BATCH_SIZE, device, dataset_save_path
+)
 
 ################################################################################
 #### Model Training
@@ -342,6 +319,7 @@ logger.info(f"Test samples: {len(test_results_df)}")
 logger.info("Output files:")
 logger.info(f"Grid data: {grid_save_path}")
 logger.info(f"Baseline SE: {baseline_save_path}")
+logger.info(f"Datasets: {dataset_save_path}")
 logger.info(f"Model: {MODEL_DIR / MODEL_TYPE}")
 logger.info(f"Plot: {plot_path}")
 logger.info("Features:")
