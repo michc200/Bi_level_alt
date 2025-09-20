@@ -239,10 +239,28 @@ def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_s
         train_dataloader = model.train_dataloader()
         val_dataloader = DataLoader(val_dataloader.dataset[:30], batch_size=1, shuffle=False)
 
+    elif model_str =="bi_level_gat":
+        hyperparameters = {
+            'num_nfeat': 8,
+            'dim_nodes': 11,    # Example value
+            'dim_lines': 6,
+            'dim_out': 2,
+            'dim_hid': 32,
+            'dim_dense' : 32,
+            'gnn_layers': 5,
+            'heads': 1,
+            'K': 2,
+            'dropout_rate': 0.0,
+            'L': 5,
+            'lr': 1e-2,
+        }
+
+        model = FAIR_GAT_BILEVEL_Lightning(hyperparameters, x_mean=x_set_mean, x_std=x_set_std, edge_mean=edge_attr_set_mean, edge_std=edge_attr_set_std, reg_coefs=reg_coefs, time_info=True)
+
     # Use the custom callback in the trainer
-    trainer = Trainer( # TODO: we will need to use a custom trainer
+    trainer = Trainer(
         max_epochs = epochs,
-        accelerator = accelerator # TODO: revert back to 150
+        accelerator = accelerator
         # callbacks=[early_stopping_callback],
     )
     trainer.fit(model, train_dataloader, val_dataloader)
@@ -261,7 +279,7 @@ if __name__ == "__main__":
     ERRORS = 'no_errors'
     MEAS_RATE = 0.5
 
-    MODEL = 'gat_dsse'
+    MODEL = 'bi_level_gat'
     REG_COEFS = {
         'mu_v':     1e-1,
         'mu_theta': 1e-1,
