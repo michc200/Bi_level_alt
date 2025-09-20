@@ -12,7 +12,7 @@ from pytorch_lightning import Trainer
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.robusttest.core.SE.gat_dsse import GAT_DSSE_Lightning
+from external.models.gat_dsse import GAT_DSSE_Lightning
 from src.robusttest.core.SE.mlp_dsse import MLP_DSSE_Lightning
 from src.robusttest.core.SE.gnn_dsse import GCN_DSSE_Lightning
 from src.robusttest.core.SE.ensemble_gat_dsse import EnsembleGAT_DSSE

@@ -9,12 +9,12 @@ from torch_geometric.nn.pool import avg_pool_neighbor_x
 from torch.nn import LeakyReLU, Linear
 import torch.nn.functional as F
 from torch.nn import Module
-from robusttest.core.SE.pf_funcs import gsp_wls_edge, compute_wls_loss, compute_physical_loss
-
-# Add path for external loss functions
+# Add path for imports
 import sys
 from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent.parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+from src.robusttest.core.SE.pf_funcs import gsp_wls_edge, compute_wls_loss, compute_physical_loss
 from external.loss import wls_loss, physical_loss, wls_and_physical_loss
 import logging
 from torch.nn.functional import mse_loss  # Import MSE loss function
