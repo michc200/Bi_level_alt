@@ -289,7 +289,7 @@ if __name__ == "__main__":
         'lam_reg':  0.8,
     } 
 
-    EPOCHS = 1
+    EPOCHS = 20
 
     # Grid and Baseline creation
     grid_time_series_folder = "dsml-data/grid-time-series"

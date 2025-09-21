@@ -134,8 +134,7 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
                                           edge_index=edge_index,
                                           reg_coefs=self.reg_coefs,
                                           node_param=node_param,
-                                          edge_param=edge_param,
-                                          num_samples=num_samples)
+                                          edge_param=edge_param)
         total_loss = wls_loss + follower_loss
         wls_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.leader_params, max_norm=1.0)
@@ -157,7 +156,7 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
         edge_input = edge_attr[:,:self.num_efeat]
         edge_param = edge_attr[:,self.num_efeat:]
         num_samples = batch.batch[-1] + 1
-        time_info = batch.x[:, self.hparams.hyperparameters['dim_nodes']+3:] \
+        time_info = batch.x[:, self.num_nfeat+3:] \
                     if self.use_time_info else None
 
         wls_loss, follower_loss, total_loss = self.optimize_step(
