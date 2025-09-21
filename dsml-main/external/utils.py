@@ -12,10 +12,7 @@ from pytorch_lightning import Trainer
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.robusttest.core.SE.gat_dsse import GAT_DSSE_Lightning
-from src.robusttest.core.SE.mlp_dsse import MLP_DSSE_Lightning
-from src.robusttest.core.SE.gnn_dsse import GCN_DSSE_Lightning
-from src.robusttest.core.SE.ensemble_gat_dsse import EnsembleGAT_DSSE
+from external.models.gat_dsse import GAT_DSSE_Lightning
 from external.models.bi_level_gat_dsse import BiLevelGAT_DSSE_Lightning
 from src.robusttest.core.SE.baseline_state_estimation import BaselineStateEstimation
 from external.loss import wls_loss, physical_loss, wls_and_physical_loss
@@ -270,26 +267,6 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
             time_info=True, loss_type=loss_type, loss_kwargs=loss_kwargs
         )
 
-    elif model_str.startswith('mlp_dsse'):
-        # MLP DSSE still uses the old use_mse_loss parameter (would need similar updates)
-        use_mse = loss_type == 'mse'
-        model = MLP_DSSE_Lightning(
-            hyperparameters, x_set_mean, x_set_std,
-            edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
-            use_mse_loss=use_mse, time_info=True
-        )
-
-    elif model_str == 'ensemble_gat_dsse':
-        # Ensemble GAT DSSE still uses the old use_mse_loss parameter (would need similar updates)
-        use_mse = loss_type == 'mse'
-        model = EnsembleGAT_DSSE(
-            hyperparameters, x_set_mean, x_set_std,
-            edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
-            train_dataloader.dataset, time_info=True, use_mse_loss=use_mse
-        )
-        train_dataloader = model.train_dataloader()
-        val_dataloader = DataLoader(val_dataloader.dataset[:30], batch_size=1, shuffle=False)
-
     elif model_str == 'bi_level_gat_dsse':
         model = BiLevelGAT_DSSE_Lightning(
             hyperparameters, x_set_mean, x_set_std,
@@ -314,103 +291,6 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
     trainer.save_checkpoint(f"{save_path}/{model_str}/model.ckpt")
 
     return trainer, model
-
-
-def evaluate_loss_components(model, test_loader, normalization_params, loss_kwargs):
-    """
-    Evaluate separate WLS and physical loss components for model analysis.
-
-    Args:
-        model: Trained model
-        test_loader: Test data loader
-        normalization_params: Dictionary containing x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std
-        loss_kwargs: Unified loss configuration containing both regularization coefficients and lambda weights
-
-    Returns:
-        dict: Dictionary containing loss components and metrics
-    """
-    model.eval()
-    total_wls_loss = 0.0
-    total_phys_loss = 0.0
-    num_batches = 0
-
-    # Extract normalization parameters
-    x_set_mean = normalization_params['x_set_mean']
-    x_set_std = normalization_params['x_set_std']
-    edge_attr_set_mean = normalization_params['edge_attr_set_mean']
-    edge_attr_set_std = normalization_params['edge_attr_set_std']
-
-    with torch.no_grad():
-        for batch in test_loader:
-            # Extract batch components
-            x = batch.x
-            edge_attr = batch.edge_attr
-            edge_index = batch.edge_index
-
-            # Process input like in training step
-            x_nodes = x[:, :model.num_nfeat]
-            x_nodes_gnn = x_nodes.clone()
-
-            # Add time info if enabled
-            if model.time_info:
-                time_info = x[:, model.num_nfeat+3:]
-                x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
-
-            edge_input = edge_attr[:, :model.num_efeat]
-
-            # Forward pass with processed input
-            output = model(x_nodes_gnn, edge_index, edge_input)
-
-            # Get node and edge parameters
-            node_param = x[:, model.num_nfeat:model.num_nfeat+3]
-            edge_param = edge_attr[:, model.num_efeat:]
-
-            try:
-                # Get num_samples like in training
-                num_samples = batch.batch[-1] + 1 if hasattr(batch, 'batch') else 1
-
-                # Use the model's calculate_loss method but override to get components
-                if model.loss_type == 'wls_and_physical' or model.loss_type == 'gsp_wls':
-                    # For wls_and_physical/gsp_wls, compute WLS and physical separately for analysis
-                    wls_loss_val = wls_loss(
-                        output, x_nodes, edge_input,
-                        x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std,
-                        edge_index, loss_kwargs, node_param, edge_param
-                    )
-
-                    phys_loss = physical_loss(
-                        output, x_set_mean, x_set_std, edge_index, edge_param, node_param, loss_kwargs
-                    )
-                elif model.loss_type == 'wls':
-                    # Only WLS loss
-                    wls_loss_val = model.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples)
-                    phys_loss = torch.tensor(0.0)
-                elif model.loss_type == 'physical':
-                    # Only physical loss
-                    wls_loss_val = torch.tensor(0.0)
-                    phys_loss = model.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples)
-                else:
-                    # For MSE or other losses, skip component analysis
-                    logger.warning(f"Loss component analysis not supported for loss_type: {model.loss_type}")
-                    continue
-
-                total_wls_loss += wls_loss_val.item()
-                total_phys_loss += phys_loss.item()
-                num_batches += 1
-
-            except Exception as e:
-                logger.warning(f"Error computing loss components: {e}")
-                continue
-
-    if num_batches == 0:
-        return {'error': 'No valid batches processed'}
-
-    return {
-        'avg_wls_loss': total_wls_loss / num_batches,
-        'avg_physical_loss': total_phys_loss / num_batches,
-        'total_loss': (total_wls_loss + total_phys_loss) / num_batches,
-        'num_batches': num_batches
-    }
 
 
 def load_or_create_datasets(grid_ts, baseline_se, dataset_save_path):
