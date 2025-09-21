@@ -88,7 +88,7 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
         self.fairness_alpha = fairness_alpha
 
     def forward(self, x_nodes, edge_index, edge_input, time_info=None):
-        return self.model(x_nodes, edge_index, edge_input, time_info)
+        return self.model(x_nodes, edge_index, edge_input)
     
     def process_input(self, batch): # This is currently unused
         combined_tensor = batch.x[:, :self.num_nfeat]
@@ -104,13 +104,13 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
 
         return combined_tensor
 
-    def optimize_step(self, x_nodes, edge_index, edge_input,
+    def optimize_step(self, x_nodes_gnn, x_nodes_raw, edge_index, edge_input,
                       node_param, edge_param, num_samples, time_info=None, k_follower=1):
         """One bi-level optimization step."""
         # Follower: Physical loss
         for _ in range(k_follower):
             self.optimizer_F.zero_grad()
-            y_pred = self.forward(x_nodes, edge_index, edge_input, time_info)
+            y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
             follower_loss = physical_loss(output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
                                 edge_index=edge_index, edge_param=edge_param,
                                 node_param=node_param, reg_coefs=self.reg_coefs)
@@ -119,8 +119,8 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
 
         # Leader: WLS loss
         self.optimizer_G.zero_grad()
-        y_pred = self.forward(x_nodes, edge_index, edge_input, time_info)
-        leader_loss = wls_loss(output=y_pred, input=x_nodes, edge_input=edge_input,
+        y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
+        leader_loss = wls_loss(output=y_pred, input=x_nodes_raw, edge_input=edge_input,
                            x_mean=self.x_mean, x_std=self.x_std,
                            edge_mean=self.edge_mean, edge_std=self.edge_std,
                            edge_index=edge_index, reg_coefs=self.reg_coefs,
@@ -151,7 +151,7 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
                     if self.use_time_info else None
 
         wls_loss, follower_loss, total_loss = self.optimize_step(
-            x_nodes, edge_index, edge_input, node_param, edge_param, num_samples, time_info
+            x_nodes_gnn, x_nodes, edge_index, edge_input, node_param, edge_param, num_samples, time_info
         )
 
         self.log("train_total_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True)
@@ -177,7 +177,7 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
                     if self.use_time_info else None
 
         # Compute losses without parameter updates for validation
-        y_pred = self.forward(x_nodes, edge_index, edge_input, time_info)
+        y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
 
         # Follower loss (Physical)
         follower_loss = physical_loss(output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
@@ -211,7 +211,7 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
             x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
         
         edge_input = edge_attr[:,:self.num_efeat]
-        y_pred = self.forward(x_nodes, edge_index, edge_input, time_info)
+        y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
 
         v_i = y_pred[:, 0:1] * self.x_std[:1] + self.x_mean[:1]
         theta_i = y_pred[:, 1:] * self.x_std[2:3] + self.x_mean[2:3]
@@ -259,7 +259,7 @@ class GAT_DSSE_BiLevel(nn.Module):
             raise ValueError("Invalid nonlin type")
 
         nn_layers = []
-        in_ch = self.dim_feat + (self.time_feat_dim if self.time_info else 0)
+        in_ch = self.dim_feat  # Time info is concatenated in preprocessing, not here
 
         if model == 'gat':
             nn_layers.append((GATv2ConvNorm(in_channels=in_ch, out_channels=self.dim_hidden,
@@ -286,8 +286,7 @@ class GAT_DSSE_BiLevel(nn.Module):
         self.model = Sequential('x, edge_index, edge_attr', nn_layers)
 
     def forward(self, x, edge_index, edge_attr, time_info=None):
-        if self.time_info and time_info is not None:
-            x = torch.cat([x, time_info], dim=1)
+        # Time info should already be concatenated in preprocessing
         return self.model(x, edge_index, edge_attr)
     
 
