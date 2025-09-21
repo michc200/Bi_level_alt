@@ -14,7 +14,7 @@ from robusttest.core.SE.pf_funcs import gsp_wls_edge, compute_wls_loss, compute_
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
-from external.loss import wls_loss, physical_loss, wls_and_physical_loss, calculate_rmse_voltage_components
+from external.loss import wls_loss, physical_loss, wls_and_physical_loss
 from external.plot_utils import init_live_plot, update_live_plot, finalize_live_plot
 import logging
 from torch.nn.functional import mse_loss  # Import MSE loss function
@@ -24,7 +24,7 @@ logger = logging.getLogger("GAT_DSSE")
 class GAT_DSSE_Lightning(pl.LightningModule):
     def __init__(self, hyperparameters, x_mean, x_std, edge_mean, edge_std, reg_coefs, time_info = True, loss_type='gsp_wls', loss_kwargs=None):
         super().__init__()
-        
+
         self.save_hyperparameters()
 
         # Model hyperparameters
@@ -40,7 +40,7 @@ class GAT_DSSE_Lightning(pl.LightningModule):
         # Initialize GNN model
         self.model = GAT_DSSE(dim_feat=dim_feat, dim_hidden= dim_hidden, dim_dense=dim_dense, dim_out=dim_out,
                               num_layers=num_layers, edge_dim=edge_dim, heads=heads, dropout=dropout)
-        
+
         # Save other required parameters
         self.x_mean = torch.tensor(x_mean)
         self.x_std = torch.tensor(x_std)
@@ -69,7 +69,7 @@ class GAT_DSSE_Lightning(pl.LightningModule):
     def forward(self, x, edge_index, edge_attr):
         """Forward pass through the GNN."""
         return self.model(x, edge_index, edge_attr)
-    
+
     def process_input(self, batch):
         combined_tensor = batch.x[:, :self.num_nfeat]
 
@@ -109,16 +109,11 @@ class GAT_DSSE_Lightning(pl.LightningModule):
 
         loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
 
-        # Calculate RMSE for voltage magnitude and angle using external function
-        rmse_v, rmse_theta = calculate_rmse_voltage_components(output, y, self.x_mean, self.x_std, node_param)
-
         # Initialize live plot on first training step
         if not self.live_plot_initialized:
             try:
                 metrics_structure = [
-                    {'train_loss': 0, 'val_loss': 0},
-                    {'train_rmse_v': 0, 'val_rmse_v': 0},
-                    {'train_rmse_theta': 0, 'val_rmse_theta': 0}
+                    {'train_loss': 0, 'val_loss': 0}
                 ]
                 init_live_plot(metrics_structure)
                 self.live_plot_initialized = True
@@ -127,8 +122,6 @@ class GAT_DSSE_Lightning(pl.LightningModule):
                 logger.warning(f"Failed to initialize live plot: {e}")
 
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log("train_rmse_v", rmse_v, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log("train_rmse_theta", rmse_theta, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -157,25 +150,16 @@ class GAT_DSSE_Lightning(pl.LightningModule):
         # Calculate loss based on the selected method
         loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
 
-        # Calculate RMSE for voltage magnitude and angle using external function
-        rmse_v, rmse_theta = calculate_rmse_voltage_components(output, y, self.x_mean, self.x_std, node_param)
-
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log("val_rmse_v", rmse_v, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log("val_rmse_theta", rmse_theta, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def on_validation_epoch_end(self):
         """Update live plot at the end of each validation epoch."""
         if self.live_plot_initialized:
             try:
-                # Get current epoch losses and RMSE values
+                # Get current epoch losses
                 train_loss = self.trainer.logged_metrics.get('train_loss_epoch', None)
                 val_loss = self.trainer.logged_metrics.get('val_loss', None)
-                train_rmse_v = self.trainer.logged_metrics.get('train_rmse_v_epoch', None)
-                val_rmse_v = self.trainer.logged_metrics.get('val_rmse_v', None)
-                train_rmse_theta = self.trainer.logged_metrics.get('train_rmse_theta_epoch', None)
-                val_rmse_theta = self.trainer.logged_metrics.get('val_rmse_theta', None)
 
                 metrics_list = []
                 current_epoch = self.current_epoch
@@ -183,14 +167,6 @@ class GAT_DSSE_Lightning(pl.LightningModule):
                 # Loss subplot
                 if train_loss is not None and val_loss is not None:
                     metrics_list.append({'train_loss': float(train_loss.cpu()), 'val_loss': float(val_loss.cpu())})
-
-                # RMSE voltage magnitude subplot
-                if train_rmse_v is not None and val_rmse_v is not None:
-                    metrics_list.append({'train_rmse_v': float(train_rmse_v.cpu()), 'val_rmse_v': float(val_rmse_v.cpu())})
-
-                # RMSE voltage angle subplot
-                if train_rmse_theta is not None and val_rmse_theta is not None:
-                    metrics_list.append({'train_rmse_theta': float(train_rmse_theta.cpu()), 'val_rmse_theta': float(val_rmse_theta.cpu())})
 
                 if metrics_list:
                     update_live_plot(current_epoch, metrics_list)
@@ -308,7 +284,7 @@ class GAT_DSSE(nn.Module):
         self.dim_dense = dim_dense
         self.edge_dim = edge_dim
         self.dim_hidden = dim_hidden
-        
+
         self.channels = dim_feat
         self.heads = heads
         self.dim_out = dim_out
@@ -317,7 +293,7 @@ class GAT_DSSE(nn.Module):
         self.dropout = dropout
         self.loop = self_loops
         self.num_layers = num_layers
-        
+
         if nonlin == 'relu':
             self.nonlin = nn.ReLU()
         elif nonlin == 'tanh':
@@ -326,7 +302,7 @@ class GAT_DSSE(nn.Module):
             self.nonlin = LeakyReLU()
         else:
             raise Exception('invalid activation type')
-        
+
         nn_layer = []
         if model == 'gat':
             hyperparameters = {"in_channels":self.dim_feat,"out_channels":self.dim_hidden,
@@ -338,10 +314,10 @@ class GAT_DSSE(nn.Module):
                 nn_layer.extend([(GATv2Conv(**hyperparameters), 'x, edge_index, edge_attr -> x'), self.nonlin])
         else:
             raise Exception('invalid model type')
-        
+
         nn_layer.extend([Linear(in_features=self.dim_hidden, out_features=self.dim_dense)])
         nn_layer.extend([Linear(in_features=self.dim_dense, out_features=self.dim_out)])
-        
+
         self.model = Sequential('x, edge_index,edge_attr', nn_layer)
 
     def forward(self,x, edge_index, edge_attr):
