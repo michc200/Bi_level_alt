@@ -12,7 +12,7 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
 from external.models.gat_dsse import GAT_DSSE_Lightning
-from external.models.bi_level_gat_dsse import BiLevelGAT_DSSE_Lightning
+from external.models.bi_level_gat_dsse import FAIR_GAT_BILEVEL_Lightning
 from src.robusttest.core.SE.baseline_state_estimation import BaselineStateEstimation
 from external.loss import wls_loss, physical_loss, wls_and_physical_loss
 
@@ -267,7 +267,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
         )
 
     elif model_str == 'bi_level_gat_dsse':
-        model = BiLevelGAT_DSSE_Lightning(
+        model = FAIR_GAT_BILEVEL_Lightning(
             hyperparameters, x_set_mean, x_set_std,
             edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
             time_info=True, loss_type=loss_type, loss_kwargs=loss_kwargs

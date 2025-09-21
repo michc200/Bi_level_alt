@@ -46,15 +46,15 @@ MEASUREMENT_RATE = 0.9
 SEED = 15
 
 # Model Parameters
-MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'mlp_dsse', 'ensemble_gat_dsse', 'bi_level_gat_dsse'
+MODEL_TYPE = 'bi_level_gat_dsse'  # Options: 'gat_dsse', 'bi_level_gat_dsse'
 EPOCHS = 5
 BATCH_SIZE = 64
 
 # Loss Configuration
-LOSS_TYPE = 'wls_and_physical'  # Options: 'gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse'
+LOSS_TYPE = 'wls_and_physical'  # Options: 'wls', 'physical', 'wls_and_physical', 'mse'
 LOSS_KWARGS = {
-    'lambda_wls': 1.0,        # Weight for WLS loss component
-    'lambda_physical': 1.0,   # Weight for physical constraint loss component
+    'lambda_wls': 1,        # Weight for WLS loss component
+    'lambda_physical': 1,   # Weight for physical constraint loss component
     'lam_v': 1,
     'lam_p': 1,
     'lam_pf': 1,
