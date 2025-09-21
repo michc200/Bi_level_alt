@@ -2,7 +2,6 @@ import os
 import random
 import logging
 import subprocess
-import pickle
 from pathlib import Path
 import torch
 from torch_geometric.loader import DataLoader
@@ -293,61 +292,33 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
     return trainer, model
 
 
-def load_or_create_datasets(grid_ts, baseline_se, dataset_save_path):
+def create_datasets(grid_ts, baseline_se):
     """
-    Load existing datasets or create new ones from grid and baseline data.
+    Create datasets from grid and baseline data.
 
     Args:
         grid_ts: Grid time series instance
         baseline_se: Baseline state estimation instance
-        dataset_save_path: Path to save/load dataset
 
     Returns:
         tuple: (train_data, val_data, test_data, normalization_params)
     """
-    dataset_save_path = Path(dataset_save_path)
+    logger.info("Creating PyTorch Geometric datasets...")
 
-    if dataset_save_path.exists():
-        logger.info(f"Loading existing datasets from: {dataset_save_path}")
-        with open(dataset_save_path, 'rb') as f:
-            dataset_dict = pickle.load(f)
+    # Create datasets from grid and baseline data
+    datasets = grid_ts.create_pyg_data(baseline_se.baseline_se_results_df)
+    train_data, val_data, test_data = datasets[:3]
+    x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = datasets[3:]
 
-        train_data = dataset_dict['train_data']
-        val_data = dataset_dict['val_data']
-        test_data = dataset_dict['test_data']
-        normalization_params = dataset_dict['normalization_params']
+    # Prepare normalization parameters
+    normalization_params = {
+        'x_set_mean': x_set_mean,
+        'x_set_std': x_set_std,
+        'edge_attr_set_mean': edge_attr_set_mean,
+        'edge_attr_set_std': edge_attr_set_std
+    }
 
-        logger.info("Datasets loaded successfully!")
-    else:
-        logger.info("Creating new PyTorch Geometric datasets...")
-
-        # Create datasets from grid and baseline data
-        datasets = grid_ts.create_pyg_data(baseline_se.baseline_se_results_df)
-        train_data, val_data, test_data = datasets[:3]
-        x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = datasets[3:]
-
-        # Prepare normalization parameters
-        normalization_params = {
-            'x_set_mean': x_set_mean,
-            'x_set_std': x_set_std,
-            'edge_attr_set_mean': edge_attr_set_mean,
-            'edge_attr_set_std': edge_attr_set_std
-        }
-
-        # Save datasets for future use
-        dataset_dict = {
-            'train_data': train_data,
-            'val_data': val_data,
-            'test_data': test_data,
-            'normalization_params': normalization_params
-        }
-
-        with open(dataset_save_path, 'wb') as f:
-            pickle.dump(dataset_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-        logger.info(f"Datasets saved to: {dataset_save_path}")
-        logger.info("Datasets created successfully!")
-
+    logger.info("Datasets created successfully!")
     logger.info(f"Training samples: {len(train_data)}")
     logger.info(f"Validation samples: {len(val_data)}")
     logger.info(f"Test samples: {len(test_data)}")
@@ -355,44 +326,21 @@ def load_or_create_datasets(grid_ts, baseline_se, dataset_save_path):
     return train_data, val_data, test_data, normalization_params
 
 
-def load_or_create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device, dataset_save_path=None):
+def create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device):
     """
-    Load existing datasets or create PyTorch Geometric datasets and data loaders.
+    Create PyTorch Geometric datasets and data loaders.
 
     Args:
         grid_ts: Grid time series instance
         baseline_se: Baseline state estimation instance
         batch_size: Batch size for data loaders
         device: Device to move tensors to
-        dataset_save_path: Optional path to save/load dataset
 
     Returns:
         tuple: (train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data)
     """
-    if dataset_save_path:
-        train_data, val_data, test_data, normalization_params = load_or_create_datasets(
-            grid_ts, baseline_se, dataset_save_path
-        )
-    else:
-        logger.info("Creating PyTorch Geometric datasets...")
-
-        # Create datasets from grid and baseline data
-        datasets = grid_ts.create_pyg_data(baseline_se.baseline_se_results_df)
-        train_data, val_data, test_data = datasets[:3]
-        x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = datasets[3:]
-
-        # Prepare normalization parameters
-        normalization_params = {
-            'x_set_mean': x_set_mean,
-            'x_set_std': x_set_std,
-            'edge_attr_set_mean': edge_attr_set_mean,
-            'edge_attr_set_std': edge_attr_set_std
-        }
-
-        logger.info("Datasets created successfully!")
-        logger.info(f"Training samples: {len(train_data)}")
-        logger.info(f"Validation samples: {len(val_data)}")
-        logger.info(f"Test samples: {len(test_data)}")
+    # Create datasets
+    train_data, val_data, test_data, normalization_params = create_datasets(grid_ts, baseline_se)
 
     # Move normalization parameters to device
     normalization_params = {

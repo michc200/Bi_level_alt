@@ -15,7 +15,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from external.utils import (
     load_or_create_grid_ts,
     load_or_create_baseline_se,
-    load_or_create_datasets_and_loaders,
+    create_datasets_and_loaders,
     train_se_methods,
     process_test_results
 )
@@ -40,7 +40,7 @@ device = torch.device('cpu')
 ################################################################################
 
 # Grid Parameters
-GRID_CODE = '1-LV-rural1--0-sw'
+GRID_CODE = '1-MV-urban--0-sw'
 ERROR_TYPE = 'no_errors'
 MEASUREMENT_RATE = 0.9
 SEED = 15
@@ -128,9 +128,8 @@ logger.info("DATASET CREATION")
 logger.info("="*80)
 
 # Create datasets and data loaders
-dataset_save_path = DATASET_DIR / grid_id
-train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data = load_or_create_datasets_and_loaders(
-    grid_ts, baseline_se, BATCH_SIZE, device, dataset_save_path
+train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data = create_datasets_and_loaders(
+    grid_ts, baseline_se, BATCH_SIZE, device
 )
 
 ################################################################################

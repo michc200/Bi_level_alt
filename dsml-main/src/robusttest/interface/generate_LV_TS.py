@@ -1,7 +1,6 @@
 import simbench as sb
 import numpy as np
 import random
-import pickle
 from sklearn.model_selection import train_test_split
 from torch_geometric.data import DataLoader
 from robusttest.core.grid_time_series import GridTimeSeries
@@ -108,9 +107,7 @@ def process_measurement_rates(grid_ts_instance, save_path):
         train_loader = DataLoader(train_data_list, batch_size=32, shuffle=True)
         test_loader = DataLoader(test_data_list, batch_size=32, shuffle=False)
 
-        # Save variables into a pickle file
-        with open(f"{save_path_meas}/data_loader.pkl", 'wb') as f:
-            pickle.dump((train_loader, test_loader, x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std), f)
+        # Note: Data loaders and normalization parameters are no longer cached
 
         # Create a baseline state estimation for these measurements
         baseline_se = BaselineStateEstimation(grid_ts_instance)
