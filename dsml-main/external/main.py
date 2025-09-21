@@ -2,6 +2,7 @@
 import os
 import warnings
 import logging
+import random
 from pathlib import Path
 
 import numpy as np
@@ -46,11 +47,11 @@ SEED = 15
 
 # Model Parameters
 MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'mlp_dsse', 'ensemble_gat_dsse', 'bi_level_gat_dsse'
-EPOCHS = 1000
+EPOCHS = 350
 BATCH_SIZE = 64
 
 # Loss Configuration
-LOSS_TYPE = 'gsp_wls'  # Options: 'gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse'
+LOSS_TYPE = 'wls_and_physical'  # Options: 'gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse'
 LOSS_KWARGS = {
     'lambda_wls': 1.0,        # Weight for WLS loss component
     'lambda_physical': 1.0,   # Weight for physical constraint loss component
@@ -78,6 +79,7 @@ for directory in [GRID_TS_DIR, BASELINE_SE_DIR, DATASET_DIR, MODEL_DIR, PLOTS_DI
 # Set random seeds
 np.random.seed(SEED)
 torch.manual_seed(SEED)
+random.seed(SEED)
 
 logger.info("Configuration loaded successfully!")
 logger.info(f"Grid: {GRID_CODE}, Model: {MODEL_TYPE}, Epochs: {EPOCHS}")

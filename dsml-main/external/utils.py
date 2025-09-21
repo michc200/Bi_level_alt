@@ -132,12 +132,12 @@ def load_or_create_grid_ts(grid_code, grid_save_path, measurement_rate=0.5):
     else:
         logger.info(f"Creating new grid time series for: {grid_code}")
         grid_ts = GridTimeSeries(grid_code)
-
         # Apply error scenario (currently no errors)
         grid_ts = no_errors(grid_ts)
 
         # Create measurements with specified rate
         grid_ts.create_measurements_ts(bus_measurement_rate=measurement_rate)
+        grid_ts.random_seed_measurements = None
 
         # Save for future use
         grid_ts.save(str(grid_save_path))
