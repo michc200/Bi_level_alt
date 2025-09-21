@@ -90,7 +90,7 @@ def grid_uncertainty(grid_ts_instance, rand_topology = False):
         ~grid_ts_instance.net.bus.index.isin(grid_ts_instance.net.trafo.lv_bus.values) &
         ~grid_ts_instance.net.bus.index.isin(grid_ts_instance.net.trafo.hv_bus.values)
     ].index
-    
+
     num_buses = np.random.randint(int(len(bus_not_trafo)/4), len(bus_not_trafo))
     remove_line_from_bus = random.sample(list(bus_not_trafo), num_buses)
     grid_uncertainty_instance = GridUncertainty(grid_ts_instance.net)
@@ -99,7 +99,7 @@ def grid_uncertainty(grid_ts_instance, rand_topology = False):
         grid_uncertainty_instance.recover_unsupplied_buses(mode='random')
     else:
         grid_uncertainty_instance.recover_unsupplied_buses(mode='location')
-        
+
     grid_uncertainty_instance.add_line_parameter_random_errors(grid_ts_instance.net.line.index)
     grid_ts_instance.net = grid_uncertainty_instance.net
 
@@ -131,7 +131,7 @@ def switching(grid_ts_instance, rand_topology = False, voltage_level = 'LV'):
             lines = switching.find_redundend_lines(chosen_buses[0])
             if len(lines) > 1:
                 line_pairs.append((lines[0], lines[-1]))
-    
+
 
     # Generate random switching profiles
     switching.generate_random_switching_profile(line_pairs)
@@ -148,10 +148,10 @@ def switching(grid_ts_instance, rand_topology = False, voltage_level = 'LV'):
     grid_ts_instance.read_time_series_data()
 
     return grid_ts_instance
-                
+
 def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std, reg_coefs, model_str = 'gat_dsse', epochs = "50" , save_path = ''):
     """Train the state estimation methods."""
-    
+
     num_bus = len(net.bus)
     if model_str == 'gat_dsse':
         hyperparameters = {
@@ -234,15 +234,33 @@ def train_se_methods(net, train_dataloader, val_dataloader,  x_set_mean, x_set_s
             'L': 5,
             'lr': 1e-2,
         }
-   
+
         model = EnsembleGAT_DSSE(hyperparameters, x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std, reg_coefs, train_dataloader.dataset, time_info=True, use_mse_loss = True)
         train_dataloader = model.train_dataloader()
         val_dataloader = DataLoader(val_dataloader.dataset[:30], batch_size=1, shuffle=False)
 
+    elif model_str =="bi_level_gat":
+        hyperparameters = {
+            'num_nfeat': 8,
+            'dim_nodes': 11,    # Example value
+            'dim_lines': 6,
+            'dim_out': 2,
+            'dim_hid': 32,
+            'dim_dense' : 32,
+            'gnn_layers': 5,
+            'heads': 1,
+            'K': 2,
+            'dropout_rate': 0.0,
+            'L': 5,
+            'lr': 1e-2,
+        }
+
+        model = FAIR_GAT_BILEVEL_Lightning(hyperparameters, x_mean=x_set_mean, x_std=x_set_std, edge_mean=edge_attr_set_mean, edge_std=edge_attr_set_std, reg_coefs=reg_coefs, time_info=True)
+
     # Use the custom callback in the trainer
-    trainer = Trainer( # TODO: we will need to use a custom trainer
+    trainer = Trainer(
         max_epochs = epochs,
-        accelerator = accelerator # TODO: revert back to 150
+        accelerator = accelerator
         # callbacks=[early_stopping_callback],
     )
     trainer.fit(model, train_dataloader, val_dataloader)
@@ -261,7 +279,7 @@ if __name__ == "__main__":
     ERRORS = 'no_errors'
     MEAS_RATE = 0.5
 
-    MODEL = 'gat_dsse'
+    MODEL = 'bi_level_gat'
     REG_COEFS = {
         'mu_v':     1e-1,
         'mu_theta': 1e-1,
@@ -272,15 +290,15 @@ if __name__ == "__main__":
     } 
 
     EPOCHS = 1
-    
+
     # Grid and Baseline creation
     grid_time_series_folder = "dsml-data/grid-time-series"
     baseline_state_estimation_folder = "dsml-data/basline-state-estimation"
     model_folder = "dsml-model/"
-    
+
     if not os.path.exists(grid_time_series_folder):
         os.makedirs(grid_time_series_folder)
-    
+
     if not os.path.exists(baseline_state_estimation_folder):
         os.makedirs(baseline_state_estimation_folder)
 
@@ -291,10 +309,10 @@ if __name__ == "__main__":
         grid_ts = no_errors(grid_ts)
         grid_ts.create_measurements_ts(bus_measurement_rate = MEAS_RATE)
         grid_ts.save(grid_save_path)
-    
+
     else:
         grid_ts = GridTimeSeries.load(grid_save_path)
-    
+
     baseline_se_id = f"GRID-{GRID}__MEAS_RATE-{MEAS_RATE}__ERROR-{ERRORS}__SEED-{SEED}"
     baseline_se_save_path = f"{baseline_state_estimation_folder}/{baseline_se_id}"
     if not os.path.exists(baseline_se_save_path):
@@ -308,26 +326,26 @@ if __name__ == "__main__":
     # Datasets
     train_data, val_data, test_data, x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = grid_ts.create_pyg_data(baseline_se.baseline_se_results_df)
     x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = (x_set_mean.to(device), x_set_std.to(device), edge_attr_set_mean.to(device), edge_attr_set_std.to(device))
-    
+
     test_start = int(len(train_data) + len(val_data))
     test_baseline = baseline_se.baseline_se_results_df[test_start:]
     test_measurements = grid_ts.measurements_bus_ts_df[test_start:]
     test_results_true = grid_ts.values_bus_ts_df[test_start:]
-    
+
     train_loader = DataLoader(train_data, batch_size=64, shuffle=True)
     val_loader = DataLoader(val_data, batch_size=64, shuffle=True)
     test_loader = DataLoader(test_data, batch_size=1, shuffle=False)
-    
+
     # Train
     trainer, model = train_se_methods(grid_ts.net, train_loader, val_loader, x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std, REG_COEFS, MODEL, EPOCHS, f"{model_folder}")
-    
+
     # Evaluate
     test_results = trainer.predict(model, test_loader)
     test_results_df = pd.DataFrame() 
     for timestamp, (vm_pu_tensor, va_degree_tensor) in enumerate(test_results):
         vm_pu = vm_pu_tensor.squeeze().tolist()
         va_degree = va_degree_tensor.squeeze().tolist()
-        
+
         # For each bus, add the data to the DataFrame
         for i in range(len(vm_pu)):
             bus_id = grid_ts.net.bus.index[i]
@@ -360,5 +378,3 @@ if __name__ == "__main__":
     ax.set_title('State Estimation Results')
     ax.legend()
     plt.show()
-    
-
