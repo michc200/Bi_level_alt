@@ -47,7 +47,7 @@ SEED = 15
 
 # Model Parameters
 MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'mlp_dsse', 'ensemble_gat_dsse', 'bi_level_gat_dsse'
-EPOCHS = 350
+EPOCHS = 5
 BATCH_SIZE = 64
 
 # Loss Configuration

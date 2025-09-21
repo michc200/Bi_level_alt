@@ -26,7 +26,7 @@ epochs_hist = []
 def plot_state_estimation_results(test_results_df, baseline_se, grid_ts, train_data, val_data,
                                  model_type, grid_code, measurement_rate, plots_dir):
     """
-    Create and save state estimation results visualization.
+    Create and save state estimation results visualization with voltage magnitudes and angles.
 
     Args:
         test_results_df: DataFrame with model predictions
@@ -54,34 +54,59 @@ def plot_state_estimation_results(test_results_df, baseline_se, grid_ts, train_d
     x_values = grid_ts.net.bus.index
 
     # Extract voltage magnitude data for the first test time step
-    y_measurements = [test_measurements.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-    y_results_true = [test_results_true.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-    y_baseline = [test_baseline.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-    y_model = [test_results_df.loc[0, f'bus_{bus}_vm_pu'] for bus in x_values]
+    y_vm_measurements = [test_measurements.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
+    y_vm_results_true = [test_results_true.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
+    y_vm_baseline = [test_baseline.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
+    y_vm_model = [test_results_df.loc[0, f'bus_{bus}_vm_pu'] for bus in x_values]
 
-    # Create the visualization
-    plt.figure(figsize=(14, 8))
+    # Extract voltage angle data for the first test time step
+    y_va_measurements = [test_measurements.loc[test_start, f'bus_{bus}_va_degree'] for bus in x_values]
+    y_va_results_true = [test_results_true.loc[test_start, f'bus_{bus}_va_degree'] for bus in x_values]
+    y_va_baseline = [test_baseline.loc[test_start, f'bus_{bus}_va_degree'] for bus in x_values]
+    y_va_model = [test_results_df.loc[0, f'bus_{bus}_va_degree'] for bus in x_values]
 
-    # Plot different traces
-    plt.scatter(x_values, y_measurements, label='Measurements', marker='o',
+    # Create the visualization with subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
+
+    # Voltage Magnitude Plot
+    ax1.scatter(x_values, y_vm_measurements, label='Measurements', marker='o',
                color='blue', alpha=0.7, s=50)
-    plt.plot(x_values, y_results_true, label='True Values',
+    ax1.plot(x_values, y_vm_results_true, label='True Values',
              color='orange', linestyle='-', linewidth=2.5)
-    plt.plot(x_values, y_baseline, label='Baseline WLS-DSSE',
+    ax1.plot(x_values, y_vm_baseline, label='Baseline WLS-DSSE',
              color='green', linestyle='-', linewidth=2)
-    plt.plot(x_values, y_model, label=f'{model_type.upper()}',
+    ax1.plot(x_values, y_vm_model, label=f'{model_type.upper()}',
              color='red', linestyle='-', linewidth=2.5)
 
-    # Customize the plot
-    plt.ylim([1.0125, 1.0275])
-    plt.xlabel('Bus Index', fontsize=14)
-    plt.ylabel('Voltage Magnitude (p.u.)', fontsize=14)
-    plt.title(f'State Estimation Results - {grid_code}\\n'
-              f'Model: {model_type.upper()}, Measurement Rate: {measurement_rate}',
-              fontsize=16, pad=20)
-    plt.legend(fontsize=12, loc='best')
-    plt.grid(True, alpha=0.3)
+    ax1.set_xlabel('Bus Index', fontsize=14)
+    ax1.set_ylabel('Voltage Magnitude (p.u.)', fontsize=14)
+    ax1.set_title(f'Voltage Magnitude - {grid_code}', fontsize=14)
+    ax1.legend(fontsize=12, loc='best')
+    ax1.grid(True, alpha=0.3)
+
+    # Voltage Angle Plot
+    ax2.scatter(x_values, y_va_measurements, label='Measurements', marker='o',
+               color='blue', alpha=0.7, s=50)
+    ax2.plot(x_values, y_va_results_true, label='True Values',
+             color='orange', linestyle='-', linewidth=2.5)
+    ax2.plot(x_values, y_va_baseline, label='Baseline WLS-DSSE',
+             color='green', linestyle='-', linewidth=2)
+    ax2.plot(x_values, y_va_model, label=f'{model_type.upper()}',
+             color='red', linestyle='-', linewidth=2.5)
+
+    ax2.set_xlabel('Bus Index', fontsize=14)
+    ax2.set_ylabel('Voltage Angle (degrees)', fontsize=14)
+    ax2.set_title(f'Voltage Angle - {grid_code}', fontsize=14)
+    ax2.legend(fontsize=12, loc='best')
+    ax2.grid(True, alpha=0.3)
+
+    # Overall title
+    fig.suptitle(f'State Estimation Results - {grid_code}\\n'
+                 f'Model: {model_type.upper()}, Measurement Rate: {measurement_rate}',
+                 fontsize=16, y=0.98)
+
     plt.tight_layout()
+    plt.subplots_adjust(top=0.90)  # Make room for suptitle
 
     # Save the plot
     plot_filename = f"{model_type}_results_{grid_code.replace('-', '_')}.png"
