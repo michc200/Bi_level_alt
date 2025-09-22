@@ -55,9 +55,9 @@ LOSS_TYPE = 'wls_and_physical'  # Options: 'wls', 'physical', 'wls_and_physical'
 LOSS_KWARGS = {
     'lambda_wls': 1,        # Weight for WLS loss component
     'lambda_physical': 1,   # Weight for physical constraint loss component
-    'lam_v': 1,
-    'lam_p': 1,
-    'lam_pf': 1,
+    'lam_v': 1, #1e-4
+    'lam_p': 1, #1e-8
+    'lam_pf': 1, #1e-6
     'lam_reg': 0.8,
 }
 
