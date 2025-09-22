@@ -25,7 +25,7 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
     def __init__(self, hyperparameters, x_mean, x_std, edge_mean, edge_std, reg_coefs, time_info = True, loss_type='gsp_wls', loss_kwargs=None,
                  heads=1, concat=True, slope=0.2, self_loops=True, dropout=0.0,
                  nonlin='leaky_relu', fairness_alpha=100.0,
-                 lr_g=1e-3, lr_f=1e-2, weight_decay=1e-5,
+                 lr_g=1e-4, lr_f=1e-3, weight_decay=1e-5,
                  time_feat_dim=0):
 
         super().__init__()
@@ -112,6 +112,11 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
                                           edge_index=edge_index, edge_param=edge_param,
                                           node_param=node_param, reg_coefs=self.reg_coefs)
             follower_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.follower_params, max_norm=5.0)
+            # sanitize grads (replace NaN/Inf with zero)
+            for p in self.follower_params:
+                if p.grad is not None:
+                    p.grad.data = torch.nan_to_num(p.grad.data, nan=0.0, posinf=1e6, neginf=-1e6)
             self.optimizer_F.step()
 
         # Leader: WLS loss
@@ -126,6 +131,10 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
         
         total_loss = leader_loss + follower_loss
         leader_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.leader_params, max_norm=5.0)
+        for p in self.leader_params:
+            if p.grad is not None:
+                p.grad.data = torch.nan_to_num(p.grad.data, nan=0.0, posinf=1e6, neginf=-1e6)
         self.optimizer_G.step()
 
         return leader_loss, follower_loss, total_loss
@@ -299,7 +308,11 @@ class LipschitzNorm(nn.Module):
             src=nj,
             reduce="amax",
             include_self=False)
-        denom = self.att_norm * (ni + max_nj_per_node[index]) + self.eps
+        denom = self.att_norm * (ni + max_nj_per_node[index])
+        # clamp denom to avoid tiny values
+        denom = torch.clamp(denom, min=self.eps)
+        # also clamp numerators to avoid huge values
+        e_ij = torch.clamp(e_ij, -1e4, 1e4)
         return e_ij / denom
 
 
@@ -341,6 +354,7 @@ class GATv2ConvNorm(GATv2Conv):
         if self.enable_lip and self.lipschitz_norm is not None:
             # x_i, x_j are [E, H, C] already from MessagePassing expansion
             e_ij = self.lipschitz_norm(e_ij, x_i, x_j, index)
+        e_ij = torch.clamp(e_ij, -20, 20) # TODO: check if this helps grad
 
         alpha = softmax(e_ij, index, ptr, dim_size)  # [E, H]
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
