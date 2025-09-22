@@ -78,7 +78,7 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
             raise RuntimeError("Leader/Follower param lists are empty — check model.layers collection")
 
         # Optimizers
-        self.optimizer_G = Adam(self.leader_params, lr=lr_g, weight_decay=weight_decay*10)
+        self.optimizer_G = Adam(self.leader_params, lr=lr_g, weight_decay=weight_decay)
         self.optimizer_F = Adam(self.follower_params, lr=lr_f, weight_decay=weight_decay)
         self.scheduler_G = ExponentialLR(self.optimizer_G, gamma=0.99)
         self.scheduler_F = ExponentialLR(self.optimizer_F, gamma=0.99)
@@ -117,7 +117,8 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
         # Leader: WLS loss
         self.optimizer_G.zero_grad()
         y_pred = self.forward(x, edge_index, edge_input)
-        leader_loss = wls_loss(output=y_pred, input=x, edge_input=edge_input,
+        x_gnn = x[:, :self.num_nfeat]
+        leader_loss = wls_loss(output=y_pred, input=x_gnn, edge_input=edge_input,
                                x_mean=self.x_mean, x_std=self.x_std,
                                edge_mean=self.edge_mean, edge_std=self.edge_std,
                                edge_index=edge_index, reg_coefs=self.reg_coefs,
@@ -132,7 +133,7 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x = batch.x.clone()
         edge_index, edge_attr = batch.edge_index, batch.edge_attr
-        node_param = x[:, self.num_nfeat:self.num_nfeat+3]
+        node_param = x[:, :self.num_nfeat]
         edge_input = edge_attr[:, :self.num_efeat]
         edge_param = edge_attr[:, self.num_efeat:]
         num_samples = batch.batch[-1] + 1
@@ -144,13 +145,14 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
         self.log("train_total_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True)
         self.log("train_wls_loss", leader_loss, on_step=True, on_epoch=True)
         self.log("train_phys_loss", follower_loss, on_step=True, on_epoch=True)
-
+        
         return total_loss
 
     def validation_step(self, batch, batch_idx):
         x = batch.x.clone()
         edge_index, edge_attr = batch.edge_index, batch.edge_attr
         node_param = x[:, self.num_nfeat:self.num_nfeat+3]
+        x_gnn = x[:, :self.num_nfeat]
         edge_input = edge_attr[:, :self.num_efeat]
         edge_param = edge_attr[:, self.num_efeat:]
         num_samples = batch.batch[-1] + 1
@@ -160,7 +162,7 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
         follower_loss = physical_loss(output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
                                       edge_index=edge_index, edge_param=edge_param,
                                       node_param=node_param, reg_coefs=self.reg_coefs)
-        leader_loss = wls_loss(output=y_pred, input=x, edge_input=edge_input,
+        leader_loss = wls_loss(output=y_pred, input=x_gnn, edge_input=edge_input,
                                x_mean=self.x_mean, x_std=self.x_std,
                                edge_mean=self.edge_mean, edge_std=self.edge_std,
                                edge_index=edge_index, reg_coefs=self.reg_coefs,
@@ -185,7 +187,7 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
             x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
         
         edge_input = edge_attr[:,:self.num_efeat]
-        y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
+        y_pred = self.forward(x, edge_index, edge_input)
 
         v_i = y_pred[:, 0:1] * self.x_std[:1] + self.x_mean[:1]
         theta_i = y_pred[:, 1:] * self.x_std[2:3] + self.x_mean[2:3]
