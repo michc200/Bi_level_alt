@@ -68,16 +68,14 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
         self.reg_coefs = reg_coefs
         self.use_time_info = time_info
 
-        # Split parameters for leader/follower
-        layers_params = list(self.model.model.children())
-        self.leader_params = []
-        self.follower_params = []
-        for idx, layer in enumerate(layers_params[:-3]):  # exclude projection
-            if isinstance(layer, GATv2Conv):
-                if idx % 2 == 0:
-                    self.leader_params += list(layer.parameters())
-                else:
-                    self.follower_params += list(layer.parameters())
+        # Collect the actual GAT conv modules from the Sequential model
+        # Leader (odd layers + projection), Follower (even layers)
+        self.leader_params = [p for i, l in enumerate(self.model.layers) if i % 2 == 0 for p in l.parameters()]
+        self.leader_params += list(self.model.projection.parameters())
+        self.follower_params = [p for i, l in enumerate(self.model.layers) if i % 2 == 1 for p in l.parameters()]
+
+        if len(self.leader_params) == 0 or len(self.follower_params) == 0:
+            raise RuntimeError("Leader/Follower param lists are empty — check model.layers collection")
 
         # Optimizers
         self.optimizer_G = Adam(self.leader_params, lr=lr_g, weight_decay=weight_decay*10)
@@ -87,110 +85,86 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
 
         self.fairness_alpha = fairness_alpha
 
-    def forward(self, x_nodes, edge_index, edge_input, time_info=None):
-        return self.model(x_nodes, edge_index, edge_input)
+    def forward(self, x, edge_index, edge_input):
+        """
+        Full x is passed in. We slice node features + time info here
+        before calling the GAT backbone.
+        """
+        # Base node features
+        x_nodes_gnn = x[:, :self.num_nfeat]
+
+        # Time features if used
+        if self.use_time_info:
+            time_info = x[:, self.num_nfeat+3:]
+            x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
+
+        return self.model(x_nodes_gnn, edge_index, edge_input)
     
-    def process_input(self, batch): # This is currently unused
-        combined_tensor = batch.x[:, :self.num_nfeat]
-
-        non_zero_mask = combined_tensor != 0
-        for _ in range(int(10)):
-            batch = avg_pool_neighbor_x(batch)
-            x_nodes_gnn = batch.x[:,:self.num_nfeat]
-
-            # Place zero values (processed) from batch_2.x into the combined tensor
-            combined_tensor[~non_zero_mask] = x_nodes_gnn[~non_zero_mask]
-            batch.x = combined_tensor
-
-        return combined_tensor
-
-    def optimize_step(self, x_nodes_gnn, x_nodes_raw, edge_index, edge_input,
-                      node_param, edge_param, num_samples, time_info=None, k_follower=1):
-        """One bi-level optimization step."""
+    def optimize_step(self, x, edge_index, edge_input,
+                      node_param, edge_param, num_samples, k_follower=1):
+        """One bi-level optimization step using full x."""
         # Follower: Physical loss
         for _ in range(k_follower):
             self.optimizer_F.zero_grad()
-            y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
-            follower_loss = physical_loss(output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
-                                edge_index=edge_index, edge_param=edge_param,
-                                node_param=node_param, reg_coefs=self.reg_coefs)
+            y_pred = self.forward(x, edge_index, edge_input)
+            follower_loss = physical_loss(output=y_pred,
+                                          x_mean=self.x_mean, x_std=self.x_std,
+                                          edge_index=edge_index, edge_param=edge_param,
+                                          node_param=node_param, reg_coefs=self.reg_coefs)
             follower_loss.backward()
             self.optimizer_F.step()
 
         # Leader: WLS loss
         self.optimizer_G.zero_grad()
-        y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
-        leader_loss = wls_loss(output=y_pred, input=x_nodes_raw, edge_input=edge_input,
-                           x_mean=self.x_mean, x_std=self.x_std,
-                           edge_mean=self.edge_mean, edge_std=self.edge_std,
-                           edge_index=edge_index, reg_coefs=self.reg_coefs,
-                           node_param=node_param, edge_param=edge_param)
+        y_pred = self.forward(x, edge_index, edge_input)
+        leader_loss = wls_loss(output=y_pred, input=x, edge_input=edge_input,
+                               x_mean=self.x_mean, x_std=self.x_std,
+                               edge_mean=self.edge_mean, edge_std=self.edge_std,
+                               edge_index=edge_index, reg_coefs=self.reg_coefs,
+                               node_param=node_param, edge_param=edge_param)
         
         total_loss = leader_loss + follower_loss
         leader_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.leader_params, max_norm=1.0)
         self.optimizer_G.step()
 
         return leader_loss, follower_loss, total_loss
 
     def training_step(self, batch, batch_idx):
-        x  = batch.x.clone()
-        edge_index = batch.edge_index
-        edge_attr = batch.edge_attr
-
-        x_nodes = x[:,:self.num_nfeat]
-        node_param = x[:,self.num_nfeat:self.num_nfeat+3]
-        x_nodes_gnn = x_nodes.clone() # self.process_input(batch)
-        if self.use_time_info:
-            time_info = x[:,self.num_nfeat+3:]
-            x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
-        edge_input = edge_attr[:,:self.num_efeat]
-        edge_param = edge_attr[:,self.num_efeat:]
+        x = batch.x.clone()
+        edge_index, edge_attr = batch.edge_index, batch.edge_attr
+        node_param = x[:, self.num_nfeat:self.num_nfeat+3]
+        edge_input = edge_attr[:, :self.num_efeat]
+        edge_param = edge_attr[:, self.num_efeat:]
         num_samples = batch.batch[-1] + 1
-        time_info = batch.x[:, self.hparams.hyperparameters['dim_nodes']+3:] \
-                    if self.use_time_info else None
 
-        wls_loss, follower_loss, total_loss = self.optimize_step(
-            x_nodes_gnn, x_nodes, edge_index, edge_input, node_param, edge_param, num_samples, time_info
+        leader_loss, follower_loss, total_loss = self.optimize_step(
+            x, edge_index, edge_input, node_param, edge_param, num_samples
         )
 
         self.log("train_total_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log("train_wls_loss", wls_loss, on_step=True, on_epoch=True)
+        self.log("train_wls_loss", leader_loss, on_step=True, on_epoch=True)
         self.log("train_phys_loss", follower_loss, on_step=True, on_epoch=True)
 
         return total_loss
 
     def validation_step(self, batch, batch_idx):
-        x  = batch.x.clone()
-        edge_index  = batch.edge_index
-        edge_attr  = batch.edge_attr
-        x_nodes = x[:,:self.num_nfeat]
-        node_param = x[:,self.num_nfeat:self.num_nfeat+3]
-        x_nodes_gnn = x_nodes.clone() # self.process_input(batch)
+        x = batch.x.clone()
+        edge_index, edge_attr = batch.edge_index, batch.edge_attr
+        node_param = x[:, self.num_nfeat:self.num_nfeat+3]
+        edge_input = edge_attr[:, :self.num_efeat]
+        edge_param = edge_attr[:, self.num_efeat:]
         num_samples = batch.batch[-1] + 1
-        if self.use_time_info:
-            time_info = x[:,self.num_nfeat+3:]
-            x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
-        edge_input = edge_attr[:,:self.num_efeat]
-        edge_param = edge_attr[:,self.num_efeat:]
-        time_info = batch.x[:, self.hparams.hyperparameters['dim_nodes']+3:] \
-                    if self.use_time_info else None
 
-        # Compute losses without parameter updates for validation
-        y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
+        y_pred = self.forward(x, edge_index, edge_input)
 
-        # Follower loss (Physical)
         follower_loss = physical_loss(output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
-                            edge_index=edge_index, edge_param=edge_param,
-                            node_param=node_param, reg_coefs=self.reg_coefs)
-
-        # Leader loss (WLS)
-        leader_loss = wls_loss(output=y_pred, input=x_nodes, edge_input=edge_input,
-                       x_mean=self.x_mean, x_std=self.x_std,
-                       edge_mean=self.edge_mean, edge_std=self.edge_std,
-                       edge_index=edge_index, reg_coefs=self.reg_coefs,
-                       node_param=node_param, edge_param=edge_param)
-
+                                      edge_index=edge_index, edge_param=edge_param,
+                                      node_param=node_param, reg_coefs=self.reg_coefs)
+        leader_loss = wls_loss(output=y_pred, input=x, edge_input=edge_input,
+                               x_mean=self.x_mean, x_std=self.x_std,
+                               edge_mean=self.edge_mean, edge_std=self.edge_std,
+                               edge_index=edge_index, reg_coefs=self.reg_coefs,
+                               node_param=node_param, edge_param=edge_param)
         total_loss = leader_loss + follower_loss
 
         self.log("val_total_loss", total_loss, on_step=False, on_epoch=True, prog_bar=True)
@@ -219,27 +193,30 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
         return v_i, theta_i
 
     def configure_optimizers(self):
-        return [self.optimizer_G, self.optimizer_F], [self.scheduler_G, self.scheduler_F]
+        return (
+            [self.optimizer_G, self.optimizer_F],
+            [
+                {"scheduler": self.scheduler_G, "interval": "epoch"},
+                {"scheduler": self.scheduler_F, "interval": "epoch"},
+            ],
+        )
+    
 # -------------------------
 # Bi-level compatible GAT model
 # -------------------------
 class GAT_DSSE_BiLevel(nn.Module):
     """
     GAT model compatible with bi-level optimization.
-    Supports optional concatenation of time_info features.
+    Uses explicit layers + projection, like old GAT_NORM_DSSE.
     """
     def __init__(self, dim_feat, dim_hidden, dim_dense, dim_out,
                  num_layers, edge_dim, heads=1, concat=True,
                  slope=0.2, self_loops=True, dropout=0.0,
-                 nonlin='leaky_relu', model='gat', time_info=False,
-                 time_feat_dim=0):
+                 nonlin='leaky_relu', time_info=False,
+                 time_feat_dim=0, lipschitz_norm=None):
+
         super().__init__()
-        self.dim_feat = dim_feat
-        self.dim_hidden = dim_hidden
-        self.dim_dense = dim_dense
-        self.dim_out = dim_out
         self.num_layers = num_layers
-        self.edge_dim = edge_dim
         self.heads = heads
         self.concat = concat
         self.slope = slope
@@ -248,7 +225,7 @@ class GAT_DSSE_BiLevel(nn.Module):
         self.time_info = time_info
         self.time_feat_dim = time_feat_dim
 
-        # Activation
+        # activation
         if nonlin == 'relu':
             self.nonlin = nn.ReLU()
         elif nonlin == 'tanh':
@@ -258,37 +235,44 @@ class GAT_DSSE_BiLevel(nn.Module):
         else:
             raise ValueError("Invalid nonlin type")
 
-        nn_layers = []
-        in_ch = self.dim_feat  # Time info is concatenated in preprocessing, not here
+        if lipschitz_norm is None:
+            lipschitz_norm = LipschitzNorm(att_norm=4.0, eps=1e-12)
 
-        if model == 'gat':
-            nn_layers.append((GATv2ConvNorm(in_channels=in_ch, out_channels=self.dim_hidden,
-                                         heads=self.heads, concat=self.concat,
-                                         negative_slope=self.slope, dropout=self.dropout,
-                                         add_self_loops=self.loop, edge_dim=self.edge_dim),
-                              'x, edge_index, edge_attr -> x'))
-            nn_layers.append(self.nonlin)
-            for _ in range(self.num_layers - 1):
-                nn_layers.append((GATv2ConvNorm(in_channels=self.dim_hidden, out_channels=self.dim_hidden,
-                                             heads=self.heads, concat=self.concat,
-                                             negative_slope=self.slope, dropout=self.dropout,
-                                             add_self_loops=self.loop, edge_dim=self.edge_dim),
-                                  'x, edge_index, edge_attr -> x'))
-                nn_layers.append(self.nonlin)
-        else:
-            raise ValueError("Invalid model type")
+        # -----------------------
+        # GAT layers (explicit)
+        # -----------------------
+        self.layers = nn.ModuleList()
+        in_ch = dim_feat
+        for _ in range(num_layers):
+            layer = GATv2ConvNorm(
+                in_channels=in_ch,
+                out_channels=dim_hidden,
+                heads=heads,
+                concat=concat,
+                negative_slope=slope,
+                dropout=dropout,
+                add_self_loops=self.loop,
+                edge_dim=edge_dim,
+                enable_lip=True,
+                lipschitz_norm=lipschitz_norm,
+            )
+            self.layers.append(layer)
+            in_ch = dim_hidden * heads if concat else dim_hidden
 
+        # -----------------------
         # Projection head
-        nn_layers.append(nn.Linear(self.dim_hidden, self.dim_dense))
-        nn_layers.append(self.nonlin)
-        nn_layers.append(nn.Linear(self.dim_dense, self.dim_out))
-
-        self.model = Sequential('x, edge_index, edge_attr', nn_layers)
+        # -----------------------
+        self.projection = nn.Sequential(
+            nn.Linear(in_ch, dim_dense),
+            self.nonlin,
+            nn.Linear(dim_dense, dim_out),
+        )
 
     def forward(self, x, edge_index, edge_attr, time_info=None):
-        # Time info should already be concatenated in preprocessing
-        return self.model(x, edge_index, edge_attr)
-    
+        for layer in self.layers:
+            x = layer(x, edge_index, edge_attr)
+            x = self.nonlin(x)
+        return self.projection(x)    
 
 class LipschitzNorm(nn.Module):
     """
