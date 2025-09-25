@@ -1,5 +1,6 @@
 import os
 import random
+import numpy as np
 import logging
 import subprocess
 from pathlib import Path
@@ -395,3 +396,47 @@ def process_test_results(test_results, grid_ts):
     logger.info(f"Variables predicted: {len(test_results_df.columns)}")
 
     return test_results_df
+
+# def calculate_metrics(true_df, predicted_df):
+#     """
+#     Compute Root Mean Squared Error (RMSE) and Mean Absolute Error (MAE) between true and predicted values.
+
+#     Args:
+#         true_df (pd.DataFrame): DataFrame containing true values.
+#         predicted_df (pd.DataFrame): DataFrame containing predicted values.
+
+#     Returns:
+#         tuple: (rmse, mae, missing_data)
+#             - rmse (float): Root Mean Squared Error.
+#             - mae (float): Mean Absolute Error.
+#             - missing_data (int): Number of missing (NaN) values in the input data.
+
+#     Notes:
+#         - NaN values are ignored in the calculation.
+#         - If all values are NaN, returns NaN for both RMSE and MAE.
+#     """
+#     # Remove NaN values
+#     mask = ~np.isnan(true_df.values) & ~np.isnan(predicted_df.values)
+#     true_values = true_df.values[mask]
+#     predicted_values = predicted_df.values[mask]
+
+#     missing_data = np.isnan(true_df.values).sum() + np.isnan(predicted_df.values).sum()
+    
+#     if len(true_values) == 0:
+#         return np.nan, np.nan  # Return NaN if all values are NaN
+    
+#     rmse = np.sqrt(((true_values - predicted_values) ** 2).mean())
+#     mae = np.abs(true_values - predicted_values).mean()
+#     return rmse, mae, missing_data
+
+# def calculate_errors(true_df, predicted_df):   
+    vm_pu_true = true_df[[col for col in true_df.columns if col.endswith("_vm_pu")]]
+    vm_pu_pred = predicted_df[[col for col in predicted_df.columns if col.endswith("_vm_pu")]]
+    
+    va_degree_true = true_df[[col for col in true_df.columns if col.endswith("_va_degree")]]
+    va_degree_pred = predicted_df[[col for col in predicted_df.columns if col.endswith("_va_degree")]]
+    
+    rmse_vm, mae_vm, missing_data = calculate_metrics(vm_pu_true, vm_pu_pred)
+    rmse_va, mae_va, _ = calculate_metrics(va_degree_true, va_degree_pred)
+
+    return rmse_vm, mae_vm, rmse_va, mae_va

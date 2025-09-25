@@ -22,26 +22,13 @@ metric_keys = []
 history = []
 epochs_hist = []
 
-
 def plot_state_estimation_results(test_results_df, baseline_se, grid_ts, train_data, val_data,
                                  model_type, grid_code, measurement_rate, plots_dir):
     """
-    Create and save state estimation results visualization with voltage magnitudes and angles.
-
-    Args:
-        test_results_df: DataFrame with model predictions
-        baseline_se: Baseline state estimation results
-        grid_ts: Grid time series instance
-        train_data: Training dataset for indexing
-        val_data: Validation dataset for indexing
-        model_type: Model type string for labeling
-        grid_code: Grid code for title and filename
-        measurement_rate: Measurement rate for title
-        plots_dir: Directory to save plots
-
-    Returns:
-        Path: Path to saved plot file
+    Create and save state estimation results visualization with voltage magnitudes, angles,
+    and RMSE/MAE comparison for model and baseline over the entire test set.
     """
+
     logger.info("Creating visualization...")
 
     # Prepare data for visualization
@@ -50,27 +37,61 @@ def plot_state_estimation_results(test_results_df, baseline_se, grid_ts, train_d
     test_measurements = grid_ts.measurements_bus_ts_df[test_start:]
     test_results_true = grid_ts.values_bus_ts_df[test_start:]
 
-    # Get bus indices for x-axis
+    # Get bus indices
     x_values = grid_ts.net.bus.index
 
-    # Extract voltage magnitude data for the first test time step
-    y_vm_measurements = [test_measurements.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-    y_vm_results_true = [test_results_true.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-    y_vm_baseline = [test_baseline.loc[test_start, f'bus_{bus}_vm_pu'] for bus in x_values]
-    y_vm_model = [test_results_df.loc[0, f'bus_{bus}_vm_pu'] for bus in x_values]
+    # --- Convert full series for metrics (all timesteps and buses) ---
+    true_vm = test_results_true[[f'bus_{bus}_vm_pu' for bus in x_values]].values.flatten()
+    baseline_vm = test_baseline[[f'bus_{bus}_vm_pu' for bus in x_values]].values.flatten()
+    model_vm = test_results_df[[f'bus_{bus}_vm_pu' for bus in x_values]].values.flatten()
 
-    # Extract voltage angle data for the first test time step
-    y_va_measurements = [test_measurements.loc[test_start, f'bus_{bus}_va_degree'] for bus in x_values]
-    y_va_results_true = [test_results_true.loc[test_start, f'bus_{bus}_va_degree'] for bus in x_values]
-    y_va_baseline = [test_baseline.loc[test_start, f'bus_{bus}_va_degree'] for bus in x_values]
-    y_va_model = [test_results_df.loc[0, f'bus_{bus}_va_degree'] for bus in x_values]
+    true_va = test_results_true[[f'bus_{bus}_va_degree' for bus in x_values]].values.flatten()
+    baseline_va = test_baseline[[f'bus_{bus}_va_degree' for bus in x_values]].values.flatten()
+    model_va = test_results_df[[f'bus_{bus}_va_degree' for bus in x_values]].values.flatten()
 
-    # Create the visualization with subplots
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
+    # --- RMSE and MAE functions ---
+    def rmse(y_true, y_pred):
+        return np.sqrt(np.mean((np.array(y_true) - np.array(y_pred)) ** 2))
+
+    def mae(y_true, y_pred):
+        return np.mean(np.abs(np.array(y_true) - np.array(y_pred)))
+
+    # --- Compute metrics over all timesteps ---
+    metrics = {
+        "RMSE_vm_model": rmse(true_vm, model_vm),
+        "RMSE_vm_baseline": rmse(true_vm, baseline_vm),
+        "RMSE_va_model": rmse(true_va, model_va),
+        "RMSE_va_baseline": rmse(true_va, baseline_va),
+        "MAE_vm_model": mae(true_vm, model_vm),
+        "MAE_vm_baseline": mae(true_vm, baseline_vm),
+        "MAE_va_model": mae(true_va, model_va),
+        "MAE_va_baseline": mae(true_va, baseline_va),
+    }
+
+    logger.info("Full test set metrics:")
+    for k, v in metrics.items():
+        logger.info(f"{k}: {v:.6f}")
+
+    # --- Pick first row consistently for snapshot visualization ---
+    t0_true = test_results_true.index[0]   # first timestamp in true data
+    t0_model = test_results_df.index[0]    # usually 0 in model predictions
+
+    y_vm_measurements = [test_measurements.loc[t0_true, f'bus_{bus}_vm_pu'] for bus in x_values]
+    y_vm_results_true = [test_results_true.loc[t0_true, f'bus_{bus}_vm_pu'] for bus in x_values]
+    y_vm_baseline = [test_baseline.loc[t0_true, f'bus_{bus}_vm_pu'] for bus in x_values]
+    y_vm_model = [test_results_df.loc[t0_model, f'bus_{bus}_vm_pu'] for bus in x_values]
+
+    y_va_measurements = [test_measurements.loc[t0_true, f'bus_{bus}_va_degree'] for bus in x_values]
+    y_va_results_true = [test_results_true.loc[t0_true, f'bus_{bus}_va_degree'] for bus in x_values]
+    y_va_baseline = [test_baseline.loc[t0_true, f'bus_{bus}_va_degree'] for bus in x_values]
+    y_va_model = [test_results_df.loc[t0_model, f'bus_{bus}_va_degree'] for bus in x_values]
+
+    # --- Create figure with 3 plots ---
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 18))
 
     # Voltage Magnitude Plot
     ax1.scatter(x_values, y_vm_measurements, label='Measurements', marker='o',
-               color='blue', alpha=0.7, s=50)
+                color='blue', alpha=0.7, s=50)
     ax1.plot(x_values, y_vm_results_true, label='True Values',
              color='orange', linestyle='-', linewidth=2.5)
     ax1.plot(x_values, y_vm_baseline, label='Baseline WLS-DSSE',
@@ -86,7 +107,7 @@ def plot_state_estimation_results(test_results_df, baseline_se, grid_ts, train_d
 
     # Voltage Angle Plot
     ax2.scatter(x_values, y_va_measurements, label='Measurements', marker='o',
-               color='blue', alpha=0.7, s=50)
+                color='blue', alpha=0.7, s=50)
     ax2.plot(x_values, y_va_results_true, label='True Values',
              color='orange', linestyle='-', linewidth=2.5)
     ax2.plot(x_values, y_va_baseline, label='Baseline WLS-DSSE',
@@ -100,13 +121,39 @@ def plot_state_estimation_results(test_results_df, baseline_se, grid_ts, train_d
     ax2.legend(fontsize=12, loc='best')
     ax2.grid(True, alpha=0.3)
 
-    # Overall title
-    fig.suptitle(f'State Estimation Results - {grid_code}\\n'
+    # --- RMSE & MAE Bar Plot (full test set) ---
+    categories = ['Voltage Magnitude', 'Voltage Angle']
+    model_rmse = [metrics['RMSE_vm_model'], metrics['RMSE_va_model']]
+    baseline_rmse = [metrics['RMSE_vm_baseline'], metrics['RMSE_va_baseline']]
+    model_mae = [metrics['MAE_vm_model'], metrics['MAE_va_model']]
+    baseline_mae = [metrics['MAE_vm_baseline'], metrics['MAE_va_baseline']]
+
+    width = 0.18
+    x = np.arange(len(categories))
+
+    ax3.bar(x - 1.5*width, model_rmse, width, label=f'{model_type.upper()} RMSE', color='red')
+    ax3.bar(x - 0.5*width, baseline_rmse, width, label='Baseline RMSE', color='green')
+    ax3.bar(x + 0.5*width, model_mae, width, label=f'{model_type.upper()} MAE', color='salmon')
+    ax3.bar(x + 1.5*width, baseline_mae, width, label='Baseline MAE', color='limegreen')
+
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(categories, fontsize=13)
+    ax3.set_ylabel('Error Value', fontsize=14)
+    ax3.set_title('RMSE and MAE over Entire Test Set', fontsize=14)
+    ax3.legend(fontsize=12, loc='best')
+    ax3.grid(axis='y', alpha=0.3)
+
+    # Add numeric labels above bars
+    for bars in ax3.containers:
+        ax3.bar_label(bars, fmt='%.4f', fontsize=10, padding=3)
+
+    # --- Figure title and save ---
+    fig.suptitle(f'State Estimation Results - {grid_code}\n'
                  f'Model: {model_type.upper()}, Measurement Rate: {measurement_rate}',
-                 fontsize=16, y=0.98)
+                 fontsize=18, y=0.99)
 
     plt.tight_layout()
-    plt.subplots_adjust(top=0.90)  # Make room for suptitle
+    plt.subplots_adjust(top=0.93)
 
     # Save the plot
     plot_filename = f"{model_type}_results_{grid_code.replace('-', '_')}.png"
@@ -116,11 +163,9 @@ def plot_state_estimation_results(test_results_df, baseline_se, grid_ts, train_d
     logger.info("Visualization created!")
     logger.info(f"Plot saved to: {plot_path}")
 
-    # Display the plot
     plt.show()
 
     return plot_path
-
 
 def create_loss_comparison_plot(loss_history, model_type, plots_dir):
     """

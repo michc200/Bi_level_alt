@@ -40,14 +40,14 @@ device = torch.device('cpu')
 ################################################################################
 
 # Grid Parameters
-GRID_CODE = "1-LV-rural1--0-sw" # '1-MV-urban--0-sw' # 1-LV-rural1--0-sw
+GRID_CODE = '1-LV-rural1--0-sw' # "1-LV-rural1--0-sw" # '1-MV-urban--0-sw' # 1-LV-rural1--0-sw
 ERROR_TYPE = 'no_errors'
 MEASUREMENT_RATE = 0.9
 SEED = 15
 
 # Model Parameters
 MODEL_TYPE = 'bi_level_gat_dsse'  # Options: 'gat_dsse', 'bi_level_gat_dsse'
-EPOCHS = 100
+EPOCHS = 2
 BATCH_SIZE = 64
 
 # Loss Configuration
@@ -174,7 +174,11 @@ test_results = trainer.predict(model, test_loader)
 
 # Process results into DataFrame
 test_results_df = process_test_results(test_results, grid_ts)
+results_path = BASE_DIR / "test_results" / f"{grid_id}__{MODEL_TYPE}_{EPOCHS}_epochs.csv"
+results_path.parent.mkdir(parents=True, exist_ok=True)
 
+test_results_df.to_csv(results_path, index=False)
+logger.info(f"Test results saved to: {results_path}")
 logger.info("Evaluation completed!")
 
 ################################################################################

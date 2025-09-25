@@ -29,8 +29,8 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
                  lr_g=1e-5, lr_f=1e-4, weight_decay=1e-6,  # Reduced learning rates
                  time_feat_dim=0, 
                  # New stability parameters
-                 grad_clip_val=1.0, loss_clip_val=100.0, 
-                 warmup_epochs=10, balance_ratio=0.1):
+                grad_clip_val=2.0, loss_clip_val=1000.0,
+                 warmup_epochs=10):
 
         super().__init__()
         self.automatic_optimization = False
@@ -52,7 +52,6 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
         self.grad_clip_val = grad_clip_val
         self.loss_clip_val = loss_clip_val
         self.warmup_epochs = warmup_epochs
-        self.balance_ratio = balance_ratio
         self.current_epoch_count = 0
 
         # GAT backbone (bi-level compatible)
@@ -126,8 +125,11 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
     
     def clip_loss(self, loss):
         """Clip loss values to prevent explosion"""
+        # Return a non-trainable scalar when loss is NaN/Inf to avoid corrupting the graph.
         if torch.isnan(loss) or torch.isinf(loss):
-            return torch.tensor(self.loss_clip_val, device=loss.device, requires_grad=True)
+            return torch.tensor(10.0, device=getattr(loss, "device", None) or torch.device("cpu"),
+                                dtype=getattr(loss, "dtype", torch.float32),
+                                requires_grad=False)
         return torch.clamp(loss, 0, self.loss_clip_val)
     
     def sanitize_gradients(self, params):
@@ -140,107 +142,46 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
                 p.grad.data = torch.clamp(p.grad.data, -10.0, 10.0)
     
     def optimize_step(self, x, edge_index, edge_input,
-                      node_param, edge_param, num_samples, k_follower=1):
-        """Stabilized bi-level optimization step"""
-        
-        # Check if we're in warmup phase
-        warmup_factor = min(1.0, self.current_epoch_count / self.warmup_epochs) if self.warmup_epochs > 0 else 1.0
-        
-        # Follower optimization with stability checks
-        follower_loss_accumulated = 0.0
-        for step in range(k_follower):
-            self.optimizer_F.zero_grad()
-            
-            try:
-                y_pred = self.forward(x, edge_index, edge_input)
-                follower_loss = physical_loss(
-                    output=y_pred,
-                    x_mean=self.x_mean, x_std=self.x_std,
-                    edge_index=edge_index, edge_param=edge_param,
-                    node_param=node_param, reg_coefs=self.reg_coefs)
-                
-                follower_loss = self.clip_loss(follower_loss)
-                follower_loss_accumulated += follower_loss.item()
-                
-                # Scale loss during warmup
-                scaled_loss = follower_loss * warmup_factor
-                scaled_loss.backward()
-                
-                # Gradient sanitization and clipping
-                self.sanitize_gradients(self.follower_params)
-                torch.nn.utils.clip_grad_norm_(self.follower_params, max_norm=self.grad_clip_val)
-                
-                # Check gradient health before stepping
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.follower_params, max_norm=float('inf'))
-                if grad_norm < 1e6 and not torch.isnan(grad_norm):  # Only step if gradients are reasonable
-                    self.optimizer_F.step()
-                else:
-                    print(f"Skipping follower step due to large gradient norm: {grad_norm}")
-                    
-            except Exception as e:
-                print(f"Error in follower step {step}: {e}")
-                follower_loss = torch.tensor(self.loss_clip_val, device=x.device, requires_grad=True)
-                break
+                    node_param, edge_param, num_samples, k_follower=1):
+        """Simplified optimization step"""
 
-        # Leader optimization
+        # Follower step
+        self.optimizer_F.zero_grad()
+        y_pred = self.forward(x, edge_index, edge_input)
+        follower_loss = physical_loss(
+            output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
+            edge_index=edge_index, edge_param=edge_param,
+            node_param=node_param, reg_coefs=self.reg_coefs)
+
+        # sanitize numeric issues and use non-trainable fallback if needed
+        if not (torch.isnan(follower_loss) or torch.isinf(follower_loss)):
+            follower_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.follower_params, max_norm=self.grad_clip_val)
+            self.optimizer_F.step()
+        else:
+            # non-trainable fallback scalar — DO NOT set requires_grad=True
+            follower_loss = torch.tensor(1.0, device=x.device, dtype=follower_loss.dtype, requires_grad=False)
+
+        # Leader step
         self.optimizer_G.zero_grad()
-        
-        try:
-            y_pred = self.forward(x, edge_index, edge_input)
-            x_gnn = x[:, :self.num_nfeat]
-            
-            leader_loss = wls_loss(
-                output=y_pred, input=x_gnn, edge_input=edge_input,
-                x_mean=self.x_mean, x_std=self.x_std,
-                edge_mean=self.edge_mean, edge_std=self.edge_std,
-                edge_index=edge_index, reg_coefs=self.reg_coefs,
-                node_param=node_param, edge_param=edge_param)
-            
-            leader_loss = self.clip_loss(leader_loss)
-            
-            # Balance the losses to prevent one from dominating
-            if len(self.loss_history['leader']) > 0 and len(self.loss_history['follower']) > 0:
-                leader_avg = sum(self.loss_history['leader'][-10:]) / len(self.loss_history['leader'][-10:])
-                follower_avg = sum(self.loss_history['follower'][-10:]) / len(self.loss_history['follower'][-10:])
-                
-                if follower_avg > 0:
-                    balance_weight = min(10.0, leader_avg / follower_avg) * self.balance_ratio
-                    total_loss = leader_loss + balance_weight * follower_loss
-                else:
-                    total_loss = leader_loss + follower_loss
-            else:
-                total_loss = leader_loss + follower_loss
-            
-            # Scale during warmup
-            scaled_loss = leader_loss * warmup_factor
-            scaled_loss.backward()
-            
-            # Gradient sanitization and clipping
-            self.sanitize_gradients(self.leader_params)
+        y_pred = self.forward(x, edge_index, edge_input)
+        x_gnn = x[:, :self.num_nfeat]
+
+        leader_loss = wls_loss(
+            output=y_pred, input=x_gnn, edge_input=edge_input,
+            x_mean=self.x_mean, x_std=self.x_std,
+            edge_mean=self.edge_mean, edge_std=self.edge_std,
+            edge_index=edge_index, reg_coefs=self.reg_coefs,
+            node_param=node_param, edge_param=edge_param)
+
+        if not (torch.isnan(leader_loss) or torch.isinf(leader_loss)):
+            leader_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.leader_params, max_norm=self.grad_clip_val)
-            
-            # Check gradient health
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.leader_params, max_norm=float('inf'))
-            if grad_norm < 1e6 and not torch.isnan(grad_norm):
-                self.optimizer_G.step()
-            else:
-                print(f"Skipping leader step due to large gradient norm: {grad_norm}")
-                
-        except Exception as e:
-            print(f"Error in leader step: {e}")
-            leader_loss = torch.tensor(self.loss_clip_val, device=x.device, requires_grad=True)
-            total_loss = leader_loss + follower_loss
+            self.optimizer_G.step()
+        else:
+            leader_loss = torch.tensor(1.0, device=x.device, dtype=leader_loss.dtype, requires_grad=False)
 
-        # Update loss history
-        self.loss_history['leader'].append(leader_loss.item())
-        self.loss_history['follower'].append(follower_loss.item())
-        self.loss_history['total'].append(total_loss.item())
-        
-        # Keep only recent history
-        for key in self.loss_history:
-            if len(self.loss_history[key]) > 100:
-                self.loss_history[key] = self.loss_history[key][-50:]
-
+        total_loss = leader_loss + follower_loss
         return leader_loss, follower_loss, total_loss
 
     def training_step(self, batch, batch_idx):
@@ -249,7 +190,12 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
         node_param = x[:, :self.num_nfeat]
         edge_input = edge_attr[:, :self.num_efeat]
         edge_param = edge_attr[:, self.num_efeat:]
-        num_samples = batch.batch[-1] + 1
+        # ensure num_samples is an int (batch.batch can be a tensor)
+        try:
+            num_samples = int(batch.batch[-1].item()) + 1
+        except Exception:
+            # fallback to node count if something odd happens
+            num_samples = int(x.size(0))
 
         # Adaptive k_follower based on loss balance
         if len(self.loss_history['leader']) > 10 and len(self.loss_history['follower']) > 10:
@@ -270,11 +216,11 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
             self.log("train_wls_loss", leader_loss, on_step=True, on_epoch=True)
         if torch.isfinite(follower_loss):
             self.log("train_phys_loss", follower_loss, on_step=True, on_epoch=True)
-        
+
         # Log learning rates
         self.log("lr_leader", self.optimizer_G.param_groups[0]['lr'], on_step=True)
         self.log("lr_follower", self.optimizer_F.param_groups[0]['lr'], on_step=True)
-        
+
         return total_loss
 
     def on_train_epoch_end(self):
@@ -342,7 +288,7 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
 
         v_i = y_pred[:, 0:1] * self.x_std[:1] + self.x_mean[:1]
         theta_i = y_pred[:, 1:] * self.x_std[2:3] + self.x_mean[2:3]
-        theta_i *= (1.- node_param[:,1:2])
+        theta_i = theta_i*(1.- node_param[:,1:2])
         return v_i, theta_i
 
     def configure_optimizers(self):
@@ -424,15 +370,9 @@ class GAT_DSSE_BiLevel_Stable(nn.Module):
 
         # More stable projection with batch norm and residual
         self.projection = nn.Sequential(
-            nn.LayerNorm(in_ch),
             nn.Linear(in_ch, dim_dense),
-            nn.BatchNorm1d(dim_dense),
             self.nonlin,
-            nn.Dropout(0.1),
-            nn.Linear(dim_dense, dim_dense // 2),
-            nn.BatchNorm1d(dim_dense // 2),
-            self.nonlin,
-            nn.Linear(dim_dense // 2, dim_out),
+            nn.Linear(dim_dense, dim_out),
         )
         
         # Initialize weights
