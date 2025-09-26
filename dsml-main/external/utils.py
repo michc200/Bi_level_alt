@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 from torch_geometric.loader import DataLoader
 from pytorch_lightning import Trainer
+from pytorch_lightning.callbacks import Callback
 
 # Add parent directory to path for imports
 import sys
@@ -229,6 +230,64 @@ def get_model_config(model_str, num_bus):
     return configs.get(model_str, configs['gat_dsse'])
 
 
+class CustomProgressCallback(Callback):
+    """Custom progress callback to show epoch progress in desired format."""
+
+    def __init__(self, total_epochs):
+        super().__init__()
+        self.total_epochs = total_epochs
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        """Called at the end of each validation epoch to show both train and val losses."""
+        current_epoch = trainer.current_epoch + 1
+
+        # Get train metrics
+        train_loss = trainer.logged_metrics.get('train_loss_epoch')
+        train_wls = trainer.logged_metrics.get('train_wls_epoch')
+        train_physical = trainer.logged_metrics.get('train_physical_epoch')
+
+        # Get validation metrics
+        val_loss = trainer.logged_metrics.get('val_loss')
+        val_wls = trainer.logged_metrics.get('val_wls')
+        val_physical = trainer.logged_metrics.get('val_physical')
+
+        # Convert train tensors to floats if they exist
+        if train_loss is not None:
+            train_loss = float(train_loss.cpu()) if hasattr(train_loss, 'cpu') else float(train_loss)
+        if train_wls is not None:
+            train_wls = float(train_wls.cpu()) if hasattr(train_wls, 'cpu') else float(train_wls)
+        if train_physical is not None:
+            train_physical = float(train_physical.cpu()) if hasattr(train_physical, 'cpu') else float(train_physical)
+
+        # Convert val tensors to floats if they exist
+        if val_loss is not None:
+            val_loss = float(val_loss.cpu()) if hasattr(val_loss, 'cpu') else float(val_loss)
+        if val_wls is not None:
+            val_wls = float(val_wls.cpu()) if hasattr(val_wls, 'cpu') else float(val_wls)
+        if val_physical is not None:
+            val_physical = float(val_physical.cpu()) if hasattr(val_physical, 'cpu') else float(val_physical)
+
+        # Format train losses
+        if train_loss is not None:
+            if train_wls is not None and train_physical is not None:
+                train_str = f"({train_loss:.6f}, {train_wls:.6f}, {train_physical:.6f})"
+            else:
+                train_str = f"({train_loss:.6f}, -, -)"
+        else:
+            train_str = "(-, -, -)"
+
+        # Format val losses
+        if val_loss is not None:
+            if val_wls is not None and val_physical is not None:
+                val_str = f"({val_loss:.6f}, {val_wls:.6f}, {val_physical:.6f})"
+            else:
+                val_str = f"({val_loss:.6f}, -, -)"
+        else:
+            val_str = "(-, -, -)"
+
+        print(f"EPOCH {current_epoch}/{self.total_epochs} | TRAIN LOSS {train_str} | VAL LOSS {val_str}")
+
+
 def train_se_methods(net, train_dataloader, val_dataloader, normalization_params,
                     loss_kwargs, model_str='gat_dsse', epochs=50, save_path='', loss_type='gsp_wls'):
     """
@@ -276,10 +335,16 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
     else:
         raise ValueError(f"Unknown model type: {model_str}")
 
+    # Create custom progress callback
+    progress_callback = CustomProgressCallback(epochs)
+
     # Create trainer
     trainer = Trainer(
         max_epochs=epochs,
-        accelerator=accelerator
+        accelerator=accelerator,
+        enable_progress_bar=False,  # Disable default progress bar
+        enable_model_summary=False,  # Disable model summary
+        callbacks=[progress_callback]  # Use custom progress callback
     )
 
     # Train the model

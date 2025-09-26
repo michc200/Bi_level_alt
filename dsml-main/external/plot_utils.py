@@ -270,8 +270,13 @@ def update_live_plot(epoch, metrics_list):
     # Save new data
     epochs_hist.append(epoch)
     for subplot_idx, metrics in enumerate(metrics_list):
-        for label, value in metrics.items():
-            history[subplot_idx][label].append(value)
+        # Ensure all expected metrics are present, append None for missing ones
+        for label in metric_keys[subplot_idx]:
+            if label in metrics:
+                history[subplot_idx][label].append(metrics[label])
+            else:
+                # Append None for missing metrics to maintain consistent length
+                history[subplot_idx][label].append(None)
 
     # Update plots with raw values (skip first 50 epochs)
     skip_epochs = 0

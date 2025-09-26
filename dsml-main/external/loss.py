@@ -151,7 +151,7 @@ def wls_and_physical_loss(output, input, edge_input, x_mean, x_std, edge_mean, e
         lambda_physical: Weight for physical constraint loss component (default: 1.0)
 
     Returns:
-        torch.Tensor: Combined loss scalar
+        tuple: (total_loss, wls_loss, physical_loss)
     """
     # Compute WLS loss
     wls_loss_val = wls_loss(output, input, edge_input, x_mean, x_std, edge_mean, edge_std, edge_index, reg_coefs, node_param, edge_param)
@@ -162,7 +162,7 @@ def wls_and_physical_loss(output, input, edge_input, x_mean, x_std, edge_mean, e
     # Combine with weights
     combined_loss = lambda_wls * wls_loss_val + lambda_physical * physical_loss_val
 
-    return combined_loss
+    return combined_loss, wls_loss_val, physical_loss_val
 
 
 def calculate_rmse_voltage_components(output, targets, x_mean, x_std, node_param):
