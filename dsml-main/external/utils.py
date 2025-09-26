@@ -429,34 +429,3 @@ def create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device):
     return train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data
 
 
-def process_test_results(test_results, grid_ts):
-    """
-    Process test results from model predictions into a DataFrame.
-
-    Args:
-        test_results: List of prediction results from trainer.predict()
-        grid_ts: Grid time series instance for bus indexing
-
-    Returns:
-        pd.DataFrame: Processed test results with bus voltage magnitudes and angles
-    """
-    import pandas as pd
-    import numpy as np
-
-    logger.info("Processing test results...")
-    test_results_df = pd.DataFrame()
-
-    for timestamp, (vm_pu_tensor, va_degree_tensor) in enumerate(test_results):
-        vm_pu = vm_pu_tensor.squeeze().tolist()
-        va_degree = va_degree_tensor.squeeze().tolist()
-
-        for i in range(len(vm_pu)):
-            bus_id = grid_ts.net.bus.index[i]
-            test_results_df.loc[timestamp, f"bus_{bus_id}_vm_pu"] = vm_pu[i]
-            test_results_df.loc[timestamp, f"bus_{bus_id}_va_degree"] = va_degree[i] * (180 / np.pi)
-
-    logger.info("Test results processing completed!")
-    logger.info(f"Test time steps: {len(test_results_df)}")
-    logger.info(f"Variables predicted: {len(test_results_df.columns)}")
-
-    return test_results_df

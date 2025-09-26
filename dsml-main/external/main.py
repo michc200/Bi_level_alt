@@ -16,10 +16,9 @@ from external.utils import (
     load_or_create_grid_ts,
     load_or_create_baseline_se,
     create_datasets_and_loaders,
-    train_se_methods,
-    process_test_results
+    train_se_methods
 )
-from external.plot_utils import plot_state_estimation_results
+from external.evaluate import evaluate_model, calculate_evaluation_metrics
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -40,23 +39,23 @@ device = torch.device('cpu')
 ################################################################################
 
 # Grid Parameters
-GRID_CODE = "1-MV-urban--0-sw" # '1-MV-urban--0-sw' # 1-LV-rural1--0-sw
+GRID_CODE = "1-LV-rural1--0-sw" # '1-MV-urban--0-sw' # 1-LV-rural1--0-sw
 ERROR_TYPE = 'no_errors'
-MEASUREMENT_RATE = 0.1
+MEASUREMENT_RATE = 0.9
 SEED = 15
 
 # Model Parameters
 MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'bi_level_gat_dsse'
-EPOCHS = 10
+EPOCHS = 100
 BATCH_SIZE = 64
 
 # Loss Configuration
 LOSS_TYPE = 'wls_and_physical'  # Options: 'wls', 'physical', 'wls_and_physical', 'mse'
 LOSS_KWARGS = {
     'lam_v': 1,
-    'lam_p': 1,
-    'lam_pf': 1,
-    'lam_reg': 5,
+    'lam_p': 0.025,
+    'lam_pf': 0.025,
+    'lam_reg': 1,
 }
 
 # Directory Setup (relative to main.py location)
@@ -158,34 +157,28 @@ logger.info("Model training completed!")
 logger.info(f"Model saved to: {MODEL_DIR / MODEL_TYPE}")
 
 ################################################################################
-#### Model Evaluation
+#### Model Evaluation and Visualization
 ################################################################################
 
-logger.info("="*80)
-logger.info("MODEL EVALUATION")
-logger.info("="*80)
-
-logger.info("Running model evaluation on test set...")
-
-# Run prediction on test data
-test_results = trainer.predict(model, test_loader)
-
-# Process results into DataFrame
-test_results_df = process_test_results(test_results, grid_ts)
-
-logger.info("Evaluation completed!")
-
-################################################################################
-#### Results Visualization
-################################################################################
-
-logger.info("="*80)
-logger.info("RESULTS VISUALIZATION")
-logger.info("="*80)
-
-# Create state estimation results visualization
-plot_path = plot_state_estimation_results(
-    test_results_df, baseline_se, grid_ts, train_data, val_data,
-    MODEL_TYPE, GRID_CODE, MEASUREMENT_RATE, PLOTS_DIR
+# Run complete evaluation pipeline with detailed metrics
+test_results_df, test_baseline, test_measurements, test_true, detailed_metrics, plot_path, rmse_plot_path = evaluate_model(
+    trainer, model, test_loader, grid_ts, baseline_se, train_data, val_data,
+    MODEL_TYPE, GRID_CODE, MEASUREMENT_RATE, PLOTS_DIR,
+    device=device
 )
+
+# Calculate additional evaluation metrics using the created test datasets
+metrics = calculate_evaluation_metrics(
+    test_results_df, test_baseline, test_true
+)
+
+# Print detailed metrics summary
+logger.info("="*80)
+logger.info("DETAILED METRICS SUMMARY")
+logger.info("="*80)
+logger.info(f"Voltage Magnitude - RMSE: {detailed_metrics['rmse_v']:.6f}, MAE: {detailed_metrics['mae_v']:.6f}")
+logger.info(f"Voltage Angle - RMSE: {detailed_metrics['rmse_th']:.6f}, MAE: {detailed_metrics['mae_th']:.6f}")
+logger.info(f"Line Loading - RMSE: {detailed_metrics['rmse_loading']:.6f}, MAE: {detailed_metrics['mae_loading']:.6f}")
+logger.info(f"Trafo Loading - RMSE: {detailed_metrics['rmse_loading_trafos']:.6f}, MAE: {detailed_metrics['mae_loading_trafos']:.6f}")
+logger.info(f"Std Proportion - V: {detailed_metrics['prop_std_v']:.2f}%, Th: {detailed_metrics['prop_std_th']:.2f}%")
 
