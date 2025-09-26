@@ -277,7 +277,7 @@ def plot_state_estimation_results(test_results_df, test_baseline, test_measureme
     y_vm_measurements = []
     x_vm_measurements = []
     y_vm_results_true = [test_true.loc[first_timestep, f'bus_{bus}_vm_pu'] for bus in bus_indices]
-    y_vm_baseline = [test_baseline.loc[first_timestep, f'bus_{bus}_vm_pu'] for bus in bus_indices]
+    y_vm_baseline = [test_baseline.loc[first_timestep, f'bus_{bus}_vm_pu'] for bus in bus_indices] if test_baseline is not None else None
     y_vm_model = [test_results_df.loc[0, f'bus_{bus}_vm_pu'] for bus in bus_indices]
 
     # Filter out zero measurements (missing measurements) for voltage magnitude
@@ -291,7 +291,7 @@ def plot_state_estimation_results(test_results_df, test_baseline, test_measureme
     y_va_measurements = []
     x_va_measurements = []
     y_va_results_true = [test_true.loc[first_timestep, f'bus_{bus}_va_degree'] for bus in bus_indices]
-    y_va_baseline = [test_baseline.loc[first_timestep, f'bus_{bus}_va_degree'] for bus in bus_indices]
+    y_va_baseline = [test_baseline.loc[first_timestep, f'bus_{bus}_va_degree'] for bus in bus_indices] if test_baseline is not None else None
     y_va_model = [test_results_df.loc[0, f'bus_{bus}_va_degree'] for bus in bus_indices]
 
     # Filter out zero measurements (missing measurements) for voltage angle
@@ -309,8 +309,9 @@ def plot_state_estimation_results(test_results_df, test_baseline, test_measureme
                color='blue', alpha=0.8, s=60)
     ax1.plot(x_continuous, y_vm_results_true, label='True Values', marker='o',
              color='orange', linestyle='-', linewidth=2, alpha=0.7, markersize=4)
-    ax1.plot(x_continuous, y_vm_baseline, label='Baseline WLS-DSSE', marker='s',
-             color='green', linestyle='-', linewidth=2, alpha=0.7, markersize=4)
+    if y_vm_baseline is not None:
+        ax1.plot(x_continuous, y_vm_baseline, label='Baseline WLS-DSSE', marker='s',
+                 color='green', linestyle='-', linewidth=2, alpha=0.7, markersize=4)
     ax1.plot(x_continuous, y_vm_model, label=f'{model_type.upper()}', marker='^',
              color='red', linestyle='-', linewidth=2, alpha=0.7, markersize=4)
 
@@ -327,8 +328,9 @@ def plot_state_estimation_results(test_results_df, test_baseline, test_measureme
                color='blue', alpha=0.8, s=60)
     ax2.plot(x_continuous, y_va_results_true, label='True Values', marker='o',
              color='orange', linestyle='-', linewidth=2, alpha=0.7, markersize=4)
-    ax2.plot(x_continuous, y_va_baseline, label='Baseline WLS-DSSE', marker='s',
-             color='green', linestyle='-', linewidth=2, alpha=0.7, markersize=4)
+    if y_va_baseline is not None:
+        ax2.plot(x_continuous, y_va_baseline, label='Baseline WLS-DSSE', marker='s',
+                 color='green', linestyle='-', linewidth=2, alpha=0.7, markersize=4)
     ax2.plot(x_continuous, y_va_model, label=f'{model_type.upper()}', marker='^',
              color='red', linestyle='-', linewidth=2, alpha=0.7, markersize=4)
 
@@ -398,7 +400,7 @@ def evaluate_model(trainer, model, test_loader, grid_ts, baseline_se, train_data
 
     # Create test datasets first
     test_start = len(train_data) + len(val_data)
-    test_baseline = baseline_se.baseline_se_results_df[test_start:]
+    test_baseline = baseline_se.baseline_se_results_df[test_start:] if baseline_se is not None else None
     test_measurements = grid_ts.measurements_bus_ts_df[test_start:]
     test_true = grid_ts.values_bus_ts_df[test_start:]
 
@@ -492,8 +494,9 @@ def calculate_evaluation_metrics(test_results_df, test_baseline, test_true):
             vm_errors_model.extend((vm_pred - vm_true) ** 2)
 
             # Baseline vs true
-            vm_baseline = test_baseline[vm_col].values[:len(vm_pred)]
-            vm_errors_baseline.extend((vm_baseline - vm_true) ** 2)
+            if test_baseline is not None:
+                vm_baseline = test_baseline[vm_col].values[:len(vm_pred)]
+                vm_errors_baseline.extend((vm_baseline - vm_true) ** 2)
 
         if va_col in test_results_df.columns and va_col in test_true.columns:
             # Model vs true (accounting for 360° wrapping)
@@ -507,21 +510,22 @@ def calculate_evaluation_metrics(test_results_df, test_baseline, test_true):
             va_errors_model.extend(angle_diff_model ** 2)
 
             # Baseline vs true (accounting for 360° wrapping)
-            va_baseline = test_baseline[va_col].values[:len(va_pred)]
-            angle_diff_baseline = va_baseline - va_true
-            angle_diff_baseline = np.where(angle_diff_baseline > 180, angle_diff_baseline - 360, angle_diff_baseline)
-            angle_diff_baseline = np.where(angle_diff_baseline < -180, angle_diff_baseline + 360, angle_diff_baseline)
-            va_errors_baseline.extend(angle_diff_baseline ** 2)
+            if test_baseline is not None:
+                va_baseline = test_baseline[va_col].values[:len(va_pred)]
+                angle_diff_baseline = va_baseline - va_true
+                angle_diff_baseline = np.where(angle_diff_baseline > 180, angle_diff_baseline - 360, angle_diff_baseline)
+                angle_diff_baseline = np.where(angle_diff_baseline < -180, angle_diff_baseline + 360, angle_diff_baseline)
+                va_errors_baseline.extend(angle_diff_baseline ** 2)
 
     # Calculate RMSE values
     metrics['model_vm_rmse'] = np.sqrt(np.mean(vm_errors_model))
     metrics['model_va_rmse'] = np.sqrt(np.mean(va_errors_model))
-    metrics['baseline_vm_rmse'] = np.sqrt(np.mean(vm_errors_baseline))
-    metrics['baseline_va_rmse'] = np.sqrt(np.mean(va_errors_baseline))
+    metrics['baseline_vm_rmse'] = np.sqrt(np.mean(vm_errors_baseline)) if vm_errors_baseline else 0
+    metrics['baseline_va_rmse'] = np.sqrt(np.mean(va_errors_baseline)) if va_errors_baseline else 0
 
     # Calculate improvement ratios
-    metrics['vm_improvement_ratio'] = metrics['baseline_vm_rmse'] / metrics['model_vm_rmse']
-    metrics['va_improvement_ratio'] = metrics['baseline_va_rmse'] / metrics['model_va_rmse']
+    metrics['vm_improvement_ratio'] = metrics['baseline_vm_rmse'] / metrics['model_vm_rmse'] if metrics['model_vm_rmse'] > 0 and metrics['baseline_vm_rmse'] > 0 else 1.0
+    metrics['va_improvement_ratio'] = metrics['baseline_va_rmse'] / metrics['model_va_rmse'] if metrics['model_va_rmse'] > 0 and metrics['baseline_va_rmse'] > 0 else 1.0
 
     logger.info("Evaluation metrics calculated:")
     logger.info(f"Model VM RMSE: {metrics['model_vm_rmse']:.6f}")
@@ -565,7 +569,10 @@ def plot_rmse_histograms(test_results_df, test_baseline, test_true, grid_ts,
     va_errors_baseline = []
 
     # Get aligned timesteps (minimum length across all datasets)
-    min_len = min(len(test_results_df), len(test_baseline), len(test_true))
+    if test_baseline is not None:
+        min_len = min(len(test_results_df), len(test_baseline), len(test_true))
+    else:
+        min_len = min(len(test_results_df), len(test_true))
     logger.info(f"Using {min_len} timesteps for RMSE calculation")
 
     for bus_id in bus_indices:
@@ -579,8 +586,9 @@ def plot_rmse_histograms(test_results_df, test_baseline, test_true, grid_ts,
             vm_errors_model.extend((vm_pred - vm_true) ** 2)
 
             # Baseline vs true - voltage magnitude (all timesteps)
-            vm_baseline = test_baseline[vm_col].values[:min_len]
-            vm_errors_baseline.extend((vm_baseline - vm_true) ** 2)
+            if test_baseline is not None:
+                vm_baseline = test_baseline[vm_col].values[:min_len]
+                vm_errors_baseline.extend((vm_baseline - vm_true) ** 2)
 
         if va_col in test_results_df.columns and va_col in test_true.columns:
             # Model vs true - voltage angle with 360° wrapping (all timesteps)
@@ -594,23 +602,24 @@ def plot_rmse_histograms(test_results_df, test_baseline, test_true, grid_ts,
             va_errors_model.extend(angle_diff_model ** 2)
 
             # Baseline vs true - voltage angle with 360° wrapping (all timesteps)
-            va_baseline = test_baseline[va_col].values[:min_len]
-            angle_diff_baseline = va_baseline - va_true
-            angle_diff_baseline = np.where(angle_diff_baseline > 180, angle_diff_baseline - 360, angle_diff_baseline)
-            angle_diff_baseline = np.where(angle_diff_baseline < -180, angle_diff_baseline + 360, angle_diff_baseline)
-            va_errors_baseline.extend(angle_diff_baseline ** 2)
+            if test_baseline is not None:
+                va_baseline = test_baseline[va_col].values[:min_len]
+                angle_diff_baseline = va_baseline - va_true
+                angle_diff_baseline = np.where(angle_diff_baseline > 180, angle_diff_baseline - 360, angle_diff_baseline)
+                angle_diff_baseline = np.where(angle_diff_baseline < -180, angle_diff_baseline + 360, angle_diff_baseline)
+                va_errors_baseline.extend(angle_diff_baseline ** 2)
 
     # Calculate overall RMSE values
     vm_rmse_model = np.sqrt(np.mean(vm_errors_model))
     va_rmse_model = np.sqrt(np.mean(va_errors_model))
-    vm_rmse_baseline = np.sqrt(np.mean(vm_errors_baseline))
-    va_rmse_baseline = np.sqrt(np.mean(va_errors_baseline))
+    vm_rmse_baseline = np.sqrt(np.mean(vm_errors_baseline)) if vm_errors_baseline else 0
+    va_rmse_baseline = np.sqrt(np.mean(va_errors_baseline)) if va_errors_baseline else 0
 
     # Create error distributions for histograms (taking square root for RMSE-like values)
     vm_errors_model = np.sqrt(vm_errors_model)
     va_errors_model = np.sqrt(va_errors_model)
-    vm_errors_baseline = np.sqrt(vm_errors_baseline)
-    va_errors_baseline = np.sqrt(va_errors_baseline)
+    vm_errors_baseline = np.sqrt(vm_errors_baseline) if vm_errors_baseline else np.array([])
+    va_errors_baseline = np.sqrt(va_errors_baseline) if va_errors_baseline else np.array([])
 
     # Create the visualization with subplots
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
@@ -626,14 +635,18 @@ def plot_rmse_histograms(test_results_df, test_baseline, test_true, grid_ts,
     ax1.legend()
 
     # Voltage Magnitude Error Distribution - Baseline
-    ax2.hist(vm_errors_baseline, bins=50, alpha=0.7, color='green', edgecolor='black')
+    if len(vm_errors_baseline) > 0:
+        ax2.hist(vm_errors_baseline, bins=50, alpha=0.7, color='green', edgecolor='black')
+        ax2.axvline(vm_rmse_baseline, color='darkgreen', linestyle='--', linewidth=2,
+                    label=f'RMSE: {vm_rmse_baseline:.4f}')
+        ax2.legend()
+    else:
+        ax2.text(0.5, 0.5, 'No Baseline Data Available', transform=ax2.transAxes,
+                ha='center', va='center', fontsize=14, color='gray')
     ax2.set_xlabel('Error (p.u.)', fontsize=12)
     ax2.set_ylabel('Frequency', fontsize=12)
     ax2.set_title('Baseline WLS-DSSE - Voltage Magnitude Error Distribution', fontsize=12)
     ax2.grid(True, alpha=0.3)
-    ax2.axvline(vm_rmse_baseline, color='darkgreen', linestyle='--', linewidth=2,
-                label=f'RMSE: {vm_rmse_baseline:.4f}')
-    ax2.legend()
 
     # Voltage Angle Error Distribution - Model
     ax3.hist(va_errors_model, bins=50, alpha=0.7, color='red', edgecolor='black')
@@ -646,14 +659,18 @@ def plot_rmse_histograms(test_results_df, test_baseline, test_true, grid_ts,
     ax3.legend()
 
     # Voltage Angle Error Distribution - Baseline
-    ax4.hist(va_errors_baseline, bins=50, alpha=0.7, color='green', edgecolor='black')
+    if len(va_errors_baseline) > 0:
+        ax4.hist(va_errors_baseline, bins=50, alpha=0.7, color='green', edgecolor='black')
+        ax4.axvline(va_rmse_baseline, color='darkgreen', linestyle='--', linewidth=2,
+                    label=f'RMSE: {va_rmse_baseline:.4f}')
+        ax4.legend()
+    else:
+        ax4.text(0.5, 0.5, 'No Baseline Data Available', transform=ax4.transAxes,
+                ha='center', va='center', fontsize=14, color='gray')
     ax4.set_xlabel('Error (degrees)', fontsize=12)
     ax4.set_ylabel('Frequency', fontsize=12)
     ax4.set_title('Baseline WLS-DSSE - Voltage Angle Error Distribution', fontsize=12)
     ax4.grid(True, alpha=0.3)
-    ax4.axvline(va_rmse_baseline, color='darkgreen', linestyle='--', linewidth=2,
-                label=f'RMSE: {va_rmse_baseline:.4f}')
-    ax4.legend()
 
     # Overall title
     fig.suptitle(f'RMSE Distribution Analysis - {grid_code}\n'
