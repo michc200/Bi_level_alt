@@ -279,7 +279,7 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x = batch.x.clone()
         edge_index, edge_attr = batch.edge_index, batch.edge_attr
-        node_param = x[:, self.num_nfeat:self.num_nfeat+3]
+        node_param = x[:, :self.num_nfeat]
         x_gnn = x[:, :self.num_nfeat]
         edge_input = edge_attr[:, :self.num_efeat]
         edge_param = edge_attr[:, self.num_efeat:]
@@ -299,8 +299,6 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
                                  lambda_wls=self.loss_kwargs.get('lambda_wls', 1.0))
             
             # Clip validation losses too
-            follower_loss = self.clip_loss(follower_loss)
-            leader_loss = self.clip_loss(leader_loss)
             total_loss = leader_loss + follower_loss
 
             if torch.isfinite(total_loss):
