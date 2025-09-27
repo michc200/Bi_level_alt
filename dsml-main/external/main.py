@@ -15,9 +15,9 @@ sys.path.append(str(Path(__file__).parent.parent))
 from external.utils import (
     load_or_create_grid_ts,
     load_or_create_baseline_se,
-    create_datasets_and_loaders,
-    train_se_methods
+    create_datasets_and_loaders
 )
+from external.train import train_se_methods
 from external.evaluate import evaluate_model, calculate_evaluation_metrics
 
 # Suppress warnings
