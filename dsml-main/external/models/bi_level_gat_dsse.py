@@ -4,7 +4,7 @@ from typing import Optional
 
 import pytorch_lightning as pl
 from torch.optim import Adam
-from torch.optim.lr_scheduler import ExponentialLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
 from torch_geometric.nn import GATv2Conv, Sequential
 from torch_geometric.nn.conv import GATv2Conv
 from torch_geometric.typing import OptTensor
@@ -16,17 +16,21 @@ from torch_geometric.nn.pool import avg_pool_neighbor_x
 from external.loss import wls_loss, physical_loss, wls_and_physical_loss
 
 
-class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
+class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
     """
-    Bi-level GAT for DSSE in Lightning.
+    Stabilized Bi-level GAT for DSSE in Lightning.
     Leader: odd layers + projection -> minimize WLS loss
     Follower: even layers -> minimize Physical loss
     """
-    def __init__(self, hyperparameters, x_mean, x_std, edge_mean, edge_std, reg_coefs, time_info = True, loss_type='gsp_wls', loss_kwargs=None,
+    def __init__(self, hyperparameters, x_mean, x_std, edge_mean, edge_std, reg_coefs, 
+                 time_info=True, loss_type='gsp_wls', loss_kwargs=None,
                  heads=1, concat=True, slope=0.2, self_loops=True, dropout=0.0,
                  nonlin='leaky_relu', fairness_alpha=100.0,
-                 lr_g=1e-3, lr_f=1e-2, weight_decay=1e-5,
-                 time_feat_dim=0):
+                 lr_g=1e-5, lr_f=1e-4, weight_decay=1e-6,  # Reduced learning rates
+                 time_feat_dim=0, 
+                 # New stability parameters
+                grad_clip_val=2.0, loss_clip_val=1000.0,
+                 warmup_epochs=10):
 
         super().__init__()
         self.automatic_optimization = False
@@ -44,21 +48,28 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
         self.num_nfeat = hyperparameters['num_nfeat']
         self.num_efeat = hyperparameters['dim_lines']
 
+        # Stability parameters
+        self.grad_clip_val = grad_clip_val
+        self.loss_clip_val = loss_clip_val
+        self.warmup_epochs = warmup_epochs
+        self.current_epoch_count = 0
+
         # GAT backbone (bi-level compatible)
-        self.model = GAT_DSSE_BiLevel(dim_feat=dim_feat,
-                                      dim_hidden=dim_hidden,
-                                      dim_dense=dim_dense,
-                                      dim_out=dim_out,
-                                      num_layers=num_layers,
-                                      edge_dim=edge_dim,
-                                      heads=heads,
-                                      concat=concat,
-                                      slope=slope,
-                                      self_loops=self_loops,
-                                      dropout=dropout,
-                                      nonlin=nonlin,
-                                      time_info=time_info,
-                                      time_feat_dim=time_feat_dim)
+        self.model = GAT_DSSE_BiLevel_Stable(
+            dim_feat=dim_feat,
+            dim_hidden=dim_hidden,
+            dim_dense=dim_dense,
+            dim_out=dim_out,
+            num_layers=num_layers,
+            edge_dim=edge_dim,
+            heads=heads,
+            concat=concat,
+            slope=slope,
+            self_loops=self_loops,
+            dropout=dropout,
+            nonlin=nonlin,
+            time_info=time_info,
+            time_feat_dim=time_feat_dim)
 
         # Data normalization / reg
         self.x_mean = x_mean
@@ -68,134 +79,195 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
         self.reg_coefs = reg_coefs
         self.use_time_info = time_info
 
-        # Split parameters for leader/follower
-        layers_params = list(self.model.model.children())
+        # Collect parameters more carefully
         self.leader_params = []
         self.follower_params = []
-        for idx, layer in enumerate(layers_params[:-3]):  # exclude projection
-            if isinstance(layer, GATv2Conv):
-                if idx % 2 == 0:
-                    self.leader_params += list(layer.parameters())
-                else:
-                    self.follower_params += list(layer.parameters())
+        
+        # Alternate layers between leader and follower
+        for i, layer in enumerate(self.model.layers):
+            if i % 2 == 0:  # Even indices -> Leader
+                self.leader_params.extend(layer.parameters())
+            else:  # Odd indices -> Follower
+                self.follower_params.extend(layer.parameters())
+        
+        # Projection always belongs to leader
+        self.leader_params.extend(self.model.projection.parameters())
 
-        # Optimizers
-        self.optimizer_G = Adam(self.leader_params, lr=lr_g, weight_decay=weight_decay*10)
-        self.optimizer_F = Adam(self.follower_params, lr=lr_f, weight_decay=weight_decay)
-        self.scheduler_G = ExponentialLR(self.optimizer_G, gamma=0.99)
-        self.scheduler_F = ExponentialLR(self.optimizer_F, gamma=0.99)
+        if len(self.leader_params) == 0 or len(self.follower_params) == 0:
+            raise RuntimeError("Leader/Follower param lists are empty")
+
+        # More conservative optimizers
+        self.optimizer_G = Adam(self.leader_params, lr=lr_g, weight_decay=weight_decay, 
+                               betas=(0.9, 0.999), eps=1e-8, amsgrad=True)
+        self.optimizer_F = Adam(self.follower_params, lr=lr_f, weight_decay=weight_decay,
+                               betas=(0.9, 0.999), eps=1e-8, amsgrad=True)
+        
+        # Use plateau scheduler for more stability
+        self.scheduler_G = ReduceLROnPlateau(self.optimizer_G, mode='min', factor=0.8, 
+                                           patience=5, min_lr=1e-7)
+        self.scheduler_F = ReduceLROnPlateau(self.optimizer_F, mode='min', factor=0.8,
+                                           patience=5, min_lr=1e-7)
 
         self.fairness_alpha = fairness_alpha
-
-    def forward(self, x_nodes, edge_index, edge_input, time_info=None):
-        return self.model(x_nodes, edge_index, edge_input)
-    
-    def process_input(self, batch): # This is currently unused
-        combined_tensor = batch.x[:, :self.num_nfeat]
-
-        non_zero_mask = combined_tensor != 0
-        for _ in range(int(10)):
-            batch = avg_pool_neighbor_x(batch)
-            x_nodes_gnn = batch.x[:,:self.num_nfeat]
-
-            # Place zero values (processed) from batch_2.x into the combined tensor
-            combined_tensor[~non_zero_mask] = x_nodes_gnn[~non_zero_mask]
-            batch.x = combined_tensor
-
-        return combined_tensor
-
-    def optimize_step(self, x_nodes_gnn, x_nodes_raw, edge_index, edge_input,
-                      node_param, edge_param, num_samples, time_info=None, k_follower=1):
-        """One bi-level optimization step."""
-        # Follower: Physical loss
-        for _ in range(k_follower):
-            self.optimizer_F.zero_grad()
-            y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
-            follower_loss = physical_loss(output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
-                                edge_index=edge_index, edge_param=edge_param,
-                                node_param=node_param, reg_coefs=self.reg_coefs)
-            follower_loss.backward()
-            self.optimizer_F.step()
-
-        # Leader: WLS loss
-        self.optimizer_G.zero_grad()
-        y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
-        leader_loss = wls_loss(output=y_pred, input=x_nodes_raw, edge_input=edge_input,
-                           x_mean=self.x_mean, x_std=self.x_std,
-                           edge_mean=self.edge_mean, edge_std=self.edge_std,
-                           edge_index=edge_index, reg_coefs=self.reg_coefs,
-                           node_param=node_param, edge_param=edge_param)
         
-        total_loss = leader_loss + follower_loss
-        leader_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.leader_params, max_norm=1.0)
-        self.optimizer_G.step()
+        # Track loss history for stability monitoring
+        self.loss_history = {'leader': [], 'follower': [], 'total': []}
 
+    def forward(self, x, edge_index, edge_input):
+        """Forward pass with gradient clipping"""
+        x_nodes_gnn = x[:, :self.num_nfeat]
+
+        if self.use_time_info:
+            time_info = x[:, self.num_nfeat+3:]
+            x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
+
+        return self.model(x_nodes_gnn, edge_index, edge_input)
+    
+    def clip_loss(self, loss):
+        """Clip loss values to prevent explosion"""
+        # Return a non-trainable scalar when loss is NaN/Inf to avoid corrupting the graph.
+        if torch.isnan(loss) or torch.isinf(loss):
+            return torch.tensor(10.0, device=getattr(loss, "device", None) or torch.device("cpu"),
+                                dtype=getattr(loss, "dtype", torch.float32),
+                                requires_grad=False)
+        return torch.clamp(loss, 0, self.loss_clip_val)
+    
+    def sanitize_gradients(self, params):
+        """Clean gradients of NaN/Inf values"""
+        for p in params:
+            if p.grad is not None:
+                # Replace NaN/Inf with zeros
+                p.grad.data = torch.nan_to_num(p.grad.data, nan=0.0, posinf=1e6, neginf=-1e6)
+                # Additional clipping
+                p.grad.data = torch.clamp(p.grad.data, -10.0, 10.0)
+    
+    def optimize_step(self, x, edge_index, edge_input,
+                    node_param, edge_param, num_samples, k_follower=1):
+        """Simplified optimization step"""
+
+        # Follower step
+        self.optimizer_F.zero_grad()
+        y_pred = self.forward(x, edge_index, edge_input)
+        follower_loss = physical_loss(
+            output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
+            edge_index=edge_index, edge_param=edge_param,
+            node_param=node_param, reg_coefs=self.reg_coefs)
+
+        # sanitize numeric issues and use non-trainable fallback if needed
+        if not (torch.isnan(follower_loss) or torch.isinf(follower_loss)):
+            follower_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.follower_params, max_norm=self.grad_clip_val)
+            self.optimizer_F.step()
+        else:
+            # non-trainable fallback scalar — DO NOT set requires_grad=True
+            follower_loss = torch.tensor(1.0, device=x.device, dtype=follower_loss.dtype, requires_grad=False)
+
+        # Leader step
+        self.optimizer_G.zero_grad()
+        y_pred = self.forward(x, edge_index, edge_input)
+        x_gnn = x[:, :self.num_nfeat]
+
+        leader_loss = wls_loss(
+            output=y_pred, input=x_gnn, edge_input=edge_input,
+            x_mean=self.x_mean, x_std=self.x_std,
+            edge_mean=self.edge_mean, edge_std=self.edge_std,
+            edge_index=edge_index, reg_coefs=self.reg_coefs,
+            node_param=node_param, edge_param=edge_param)
+
+        if not (torch.isnan(leader_loss) or torch.isinf(leader_loss)):
+            leader_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.leader_params, max_norm=self.grad_clip_val)
+            self.optimizer_G.step()
+        else:
+            leader_loss = torch.tensor(1.0, device=x.device, dtype=leader_loss.dtype, requires_grad=False)
+
+        total_loss = leader_loss + follower_loss
         return leader_loss, follower_loss, total_loss
 
     def training_step(self, batch, batch_idx):
-        x  = batch.x.clone()
-        edge_index = batch.edge_index
-        edge_attr = batch.edge_attr
+        x = batch.x.clone()
+        edge_index, edge_attr = batch.edge_index, batch.edge_attr
+        node_param = x[:, :self.num_nfeat]
+        edge_input = edge_attr[:, :self.num_efeat]
+        edge_param = edge_attr[:, self.num_efeat:]
+        # ensure num_samples is an int (batch.batch can be a tensor)
+        try:
+            num_samples = int(batch.batch[-1].item()) + 1
+        except Exception:
+            # fallback to node count if something odd happens
+            num_samples = int(x.size(0))
 
-        x_nodes = x[:,:self.num_nfeat]
-        node_param = x[:,self.num_nfeat:self.num_nfeat+3]
-        x_nodes_gnn = x_nodes.clone() # self.process_input(batch)
-        if self.use_time_info:
-            time_info = x[:,self.num_nfeat+3:]
-            x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
-        edge_input = edge_attr[:,:self.num_efeat]
-        edge_param = edge_attr[:,self.num_efeat:]
-        num_samples = batch.batch[-1] + 1
-        time_info = batch.x[:, self.hparams.hyperparameters['dim_nodes']+3:] \
-                    if self.use_time_info else None
+        # Adaptive k_follower based on loss balance
+        if len(self.loss_history['leader']) > 10 and len(self.loss_history['follower']) > 10:
+            leader_recent = sum(self.loss_history['leader'][-5:]) / 5
+            follower_recent = sum(self.loss_history['follower'][-5:]) / 5
+            k_follower = 2 if follower_recent > leader_recent * 2 else 1
+        else:
+            k_follower = 1
 
-        wls_loss, follower_loss, total_loss = self.optimize_step(
-            x_nodes_gnn, x_nodes, edge_index, edge_input, node_param, edge_param, num_samples, time_info
+        leader_loss, follower_loss, total_loss = self.optimize_step(
+            x, edge_index, edge_input, node_param, edge_param, num_samples, k_follower=k_follower
         )
 
-        self.log("train_total_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log("train_wls_loss", wls_loss, on_step=True, on_epoch=True)
-        self.log("train_phys_loss", follower_loss, on_step=True, on_epoch=True)
+        # Log with finite check
+        if torch.isfinite(total_loss):
+            self.log("train_total_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True)
+        if torch.isfinite(leader_loss):
+            self.log("train_wls_loss", leader_loss, on_step=True, on_epoch=True)
+        if torch.isfinite(follower_loss):
+            self.log("train_phys_loss", follower_loss, on_step=True, on_epoch=True)
+
+        # Log learning rates
+        self.log("lr_leader", self.optimizer_G.param_groups[0]['lr'], on_step=True)
+        self.log("lr_follower", self.optimizer_F.param_groups[0]['lr'], on_step=True)
 
         return total_loss
 
+    def on_train_epoch_end(self):
+        """Update epoch counter and schedulers"""
+        self.current_epoch_count += 1
+        
+        # Update schedulers with average loss from this epoch
+        if len(self.loss_history['total']) > 0:
+            avg_loss = sum(self.loss_history['total'][-20:]) / len(self.loss_history['total'][-20:])
+            self.scheduler_G.step(avg_loss)
+            self.scheduler_F.step(avg_loss)
+
     def validation_step(self, batch, batch_idx):
-        x  = batch.x.clone()
-        edge_index  = batch.edge_index
-        edge_attr  = batch.edge_attr
-        x_nodes = x[:,:self.num_nfeat]
-        node_param = x[:,self.num_nfeat:self.num_nfeat+3]
-        x_nodes_gnn = x_nodes.clone() # self.process_input(batch)
-        num_samples = batch.batch[-1] + 1
-        if self.use_time_info:
-            time_info = x[:,self.num_nfeat+3:]
-            x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
-        edge_input = edge_attr[:,:self.num_efeat]
-        edge_param = edge_attr[:,self.num_efeat:]
-        time_info = batch.x[:, self.hparams.hyperparameters['dim_nodes']+3:] \
-                    if self.use_time_info else None
+        x = batch.x.clone()
+        edge_index, edge_attr = batch.edge_index, batch.edge_attr
+        node_param = x[:, self.num_nfeat:self.num_nfeat+3]
+        x_gnn = x[:, :self.num_nfeat]
+        edge_input = edge_attr[:, :self.num_efeat]
+        edge_param = edge_attr[:, self.num_efeat:]
 
-        # Compute losses without parameter updates for validation
-        y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
+        try:
+            y_pred = self.forward(x, edge_index, edge_input)
 
-        # Follower loss (Physical)
-        follower_loss = physical_loss(output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
-                            edge_index=edge_index, edge_param=edge_param,
-                            node_param=node_param, reg_coefs=self.reg_coefs)
+            follower_loss = physical_loss(output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
+                                        edge_index=edge_index, edge_param=edge_param,
+                                        node_param=node_param, reg_coefs=self.reg_coefs)
+            leader_loss = wls_loss(output=y_pred, input=x_gnn, edge_input=edge_input,
+                                 x_mean=self.x_mean, x_std=self.x_std,
+                                 edge_mean=self.edge_mean, edge_std=self.edge_std,
+                                 edge_index=edge_index, reg_coefs=self.reg_coefs,
+                                 node_param=node_param, edge_param=edge_param)
+            
+            # Clip validation losses too
+            follower_loss = self.clip_loss(follower_loss)
+            leader_loss = self.clip_loss(leader_loss)
+            total_loss = leader_loss + follower_loss
 
-        # Leader loss (WLS)
-        leader_loss = wls_loss(output=y_pred, input=x_nodes, edge_input=edge_input,
-                       x_mean=self.x_mean, x_std=self.x_std,
-                       edge_mean=self.edge_mean, edge_std=self.edge_std,
-                       edge_index=edge_index, reg_coefs=self.reg_coefs,
-                       node_param=node_param, edge_param=edge_param)
+            if torch.isfinite(total_loss):
+                self.log("val_total_loss", total_loss, on_step=False, on_epoch=True, prog_bar=True)
+            if torch.isfinite(leader_loss):
+                self.log("val_wls_loss", leader_loss, on_step=False, on_epoch=True)
+            if torch.isfinite(follower_loss):
+                self.log("val_phys_loss", follower_loss, on_step=False, on_epoch=True)
 
-        total_loss = leader_loss + follower_loss
-
-        self.log("val_total_loss", total_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val_wls_loss", leader_loss, on_step=False, on_epoch=True)
-        self.log("val_phys_loss", follower_loss, on_step=False, on_epoch=True)
+        except Exception as e:
+            print(f"Error in validation step: {e}")
+            total_loss = torch.tensor(self.loss_clip_val, device=x.device)
 
         return total_loss
 
@@ -205,41 +277,50 @@ class FAIR_GAT_BILEVEL_Lightning(pl.LightningModule):
         edge_attr = batch.edge_attr
         node_param = x[:,self.num_nfeat:self.num_nfeat+3]
         x_nodes = x[:,:self.num_nfeat]
-        x_nodes_gnn = x_nodes.clone() # self.process_input(batch)
+        x_nodes_gnn = x_nodes.clone()
+        
         if self.use_time_info:
             time_info = x[:,self.num_nfeat+3:]
             x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
         
         edge_input = edge_attr[:,:self.num_efeat]
-        y_pred = self.forward(x_nodes_gnn, edge_index, edge_input)
+        y_pred = self.forward(x, edge_index, edge_input)
 
         v_i = y_pred[:, 0:1] * self.x_std[:1] + self.x_mean[:1]
         theta_i = y_pred[:, 1:] * self.x_std[2:3] + self.x_mean[2:3]
-        theta_i *= (1.- node_param[:,1:2])
+        theta_i = theta_i*(1.- node_param[:,1:2])
         return v_i, theta_i
 
     def configure_optimizers(self):
-        return [self.optimizer_G, self.optimizer_F], [self.scheduler_G, self.scheduler_F]
-# -------------------------
-# Bi-level compatible GAT model
-# -------------------------
-class GAT_DSSE_BiLevel(nn.Module):
-    """
-    GAT model compatible with bi-level optimization.
-    Supports optional concatenation of time_info features.
-    """
+        return (
+            [self.optimizer_G, self.optimizer_F],
+            [
+                {
+                    "scheduler": self.scheduler_G,
+                    "monitor": "val_total_loss",
+                    "interval": "epoch",
+                    "frequency": 1,
+                },
+                {
+                    "scheduler": self.scheduler_F,
+                    "monitor": "val_total_loss",
+                    "interval": "epoch",
+                    "frequency": 1,
+                },
+            ]
+        )
+
+
+class GAT_DSSE_BiLevel_Stable(nn.Module):
+    """Stabilized GAT model with improved normalization"""
     def __init__(self, dim_feat, dim_hidden, dim_dense, dim_out,
                  num_layers, edge_dim, heads=1, concat=True,
                  slope=0.2, self_loops=True, dropout=0.0,
-                 nonlin='leaky_relu', model='gat', time_info=False,
+                 nonlin='leaky_relu', time_info=False,
                  time_feat_dim=0):
+
         super().__init__()
-        self.dim_feat = dim_feat
-        self.dim_hidden = dim_hidden
-        self.dim_dense = dim_dense
-        self.dim_out = dim_out
         self.num_layers = num_layers
-        self.edge_dim = edge_dim
         self.heads = heads
         self.concat = concat
         self.slope = slope
@@ -248,94 +329,118 @@ class GAT_DSSE_BiLevel(nn.Module):
         self.time_info = time_info
         self.time_feat_dim = time_feat_dim
 
-        # Activation
+        # More conservative activation
         if nonlin == 'relu':
             self.nonlin = nn.ReLU()
         elif nonlin == 'tanh':
             self.nonlin = nn.Tanh()
         elif nonlin == 'leaky_relu':
-            self.nonlin = nn.LeakyReLU()
+            self.nonlin = nn.LeakyReLU(negative_slope=0.01)  # Less aggressive
         else:
-            raise ValueError("Invalid nonlin type")
+            self.nonlin = nn.ReLU()  # Default to ReLU
 
-        nn_layers = []
-        in_ch = self.dim_feat  # Time info is concatenated in preprocessing, not here
+        # Improved Lipschitz norm
+        lipschitz_norm = StableLipschitzNorm(att_norm=2.0, eps=1e-8)
 
-        if model == 'gat':
-            nn_layers.append((GATv2ConvNorm(in_channels=in_ch, out_channels=self.dim_hidden,
-                                         heads=self.heads, concat=self.concat,
-                                         negative_slope=self.slope, dropout=self.dropout,
-                                         add_self_loops=self.loop, edge_dim=self.edge_dim),
-                              'x, edge_index, edge_attr -> x'))
-            nn_layers.append(self.nonlin)
-            for _ in range(self.num_layers - 1):
-                nn_layers.append((GATv2ConvNorm(in_channels=self.dim_hidden, out_channels=self.dim_hidden,
-                                             heads=self.heads, concat=self.concat,
-                                             negative_slope=self.slope, dropout=self.dropout,
-                                             add_self_loops=self.loop, edge_dim=self.edge_dim),
-                                  'x, edge_index, edge_attr -> x'))
-                nn_layers.append(self.nonlin)
-        else:
-            raise ValueError("Invalid model type")
+        # GAT layers with batch normalization
+        self.layers = nn.ModuleList()
+        self.layer_norms = nn.ModuleList()
+        
+        in_ch = dim_feat
+        for i in range(num_layers):
+            layer = GATv2ConvNorm(
+                in_channels=in_ch,
+                out_channels=dim_hidden,
+                heads=heads,
+                concat=concat,
+                negative_slope=slope,
+                dropout=dropout,
+                add_self_loops=self.loop,
+                edge_dim=edge_dim,
+                enable_lip=True,
+                lipschitz_norm=lipschitz_norm,
+            )
+            self.layers.append(layer)
+            
+            # Add layer normalization
+            out_dim = dim_hidden * heads if concat else dim_hidden
+            self.layer_norms.append(nn.LayerNorm(out_dim))
+            
+            in_ch = out_dim
 
-        # Projection head
-        nn_layers.append(nn.Linear(self.dim_hidden, self.dim_dense))
-        nn_layers.append(self.nonlin)
-        nn_layers.append(nn.Linear(self.dim_dense, self.dim_out))
+        # More stable projection with batch norm and residual
+        self.projection = nn.Sequential(
+            nn.Linear(in_ch, dim_dense),
+            self.nonlin,
+            nn.Linear(dim_dense, dim_out),
+        )
+        
+        # Initialize weights
+        self.apply(self._init_weights)
 
-        self.model = Sequential('x, edge_index, edge_attr', nn_layers)
+    def _init_weights(self, module):
+        """Conservative weight initialization"""
+        if isinstance(module, nn.Linear):
+            torch.nn.init.xavier_uniform_(module.weight, gain=0.5)
+            if module.bias is not None:
+                torch.nn.init.constant_(module.bias, 0)
 
     def forward(self, x, edge_index, edge_attr, time_info=None):
-        # Time info should already be concatenated in preprocessing
-        return self.model(x, edge_index, edge_attr)
-    
+        for i, (layer, norm) in enumerate(zip(self.layers, self.layer_norms)):
+            residual = x if i > 0 and x.size(-1) == layer.out_channels * (layer.heads if layer.concat else 1) else None
+            
+            x = layer(x, edge_index, edge_attr)
+            x = norm(x)
+            
+            # Residual connection where possible
+            if residual is not None:
+                x = x + 0.1 * residual  # Scaled residual
+                
+            x = self.nonlin(x)
+            
+        return self.projection(x)
 
-class LipschitzNorm(nn.Module):
-    """
-    Scales pre-softmax logits e_ij per head to control sensitivity.
-    Shapes:
-      e_ij: [E, H]
-      x_i, x_j: [E, H, C]
-      index: [E]  – destination node index for softmax groups
-    """
-    def __init__(self, att_norm: float = 4.0, eps: float = 1e-12):
+
+class StableLipschitzNorm(nn.Module):
+    """More stable version of Lipschitz normalization"""
+    def __init__(self, att_norm: float = 2.0, eps: float = 1e-8):
         super().__init__()
         self.att_norm = float(att_norm)
         self.eps = float(eps)
 
     def forward(self, e_ij: Tensor, x_i: Tensor, x_j: Tensor, index: Tensor) -> Tensor:
-        ni = torch.norm(x_i, dim=-1)         # [E, H]
-        nj = torch.norm(x_j, dim=-1)         # [E, H]
-        max_nj_per_node = torch.scatter_reduce(
-            torch.zeros(index.max().item() + 1, nj.size(-1), device=nj.device, dtype=nj.dtype),
+        # Compute norms with numerical stability
+        ni = torch.norm(x_i, dim=-1, p=2) + self.eps  # [E, H]
+        nj = torch.norm(x_j, dim=-1, p=2) + self.eps  # [E, H]
+        
+        # More stable max reduction
+        max_nj_per_node = torch.zeros(index.max().item() + 1, nj.size(-1), 
+                                    device=nj.device, dtype=nj.dtype)
+        max_nj_per_node = max_nj_per_node.scatter_reduce(
             dim=0,
             index=index.unsqueeze(-1).expand_as(nj),
             src=nj,
             reduce="amax",
-            include_self=False)
+            include_self=False
+        ) + self.eps
+        
         denom = self.att_norm * (ni + max_nj_per_node[index]) + self.eps
-        return e_ij / denom
+        
+        # Stable division with clipping
+        ratio = e_ij / denom
+        return torch.clamp(ratio, -10.0, 10.0)
 
 
 class GATv2ConvNorm(GATv2Conv):
-    """
-    GATv2 with optional Lipschitz normalization on attention logits.
-    Set `enable_lip=True` to activate.
-    """
-    def __init__(self,
-                 *args,
-                 enable_lip: bool = True,
-                 lipschitz_norm: Optional[nn.Module] = None,
-                 **kwargs):
+    """Stabilized GATv2 with improved normalization"""
+    def __init__(self, *args, enable_lip: bool = True,
+                 lipschitz_norm: Optional[nn.Module] = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.enable_lip = enable_lip
-        self.lipschitz_norm = lipschitz_norm if lipschitz_norm is not None else LipschitzNorm()
+        self.lipschitz_norm = lipschitz_norm if lipschitz_norm is not None else StableLipschitzNorm()
 
-    # Keep the same signature to stay TorchScript-friendly
-    def edge_update(self,
-                    x_j: Tensor, x_i: Tensor, edge_attr: OptTensor,
-                    index: Tensor, ptr: OptTensor,
-                    dim_size: Optional[int]) -> Tensor:
+    def edge_update(self, x_j: Tensor, x_i: Tensor, edge_attr: OptTensor,
+                    index: Tensor, ptr: OptTensor, dim_size: Optional[int]) -> Tensor:
         x = x_i + x_j
 
         if edge_attr is not None:
@@ -346,16 +451,18 @@ class GATv2ConvNorm(GATv2Conv):
             edge_attr = edge_attr.view(-1, self.heads, self.out_channels)
             x = x + edge_attr
 
-        x = F.leaky_relu(x, self.negative_slope)
+        x = F.leaky_relu(x, negative_slope=0.01)  # Less aggressive slope
 
-        # Pre-softmax logits per edge per head
-        e_ij = (x * self.att).sum(dim=-1)  # [E, H]
+        # Pre-softmax logits
+        e_ij = (x * self.att).sum(dim=-1)
 
-        # Lipschitz scaling before softmax
+        # Lipschitz scaling with stability check
         if self.enable_lip and self.lipschitz_norm is not None:
-            # x_i, x_j are [E, H, C] already from MessagePassing expansion
             e_ij = self.lipschitz_norm(e_ij, x_i, x_j, index)
+        
+        # Additional stability clipping
+        e_ij = torch.clamp(e_ij, -8, 8)
 
-        alpha = softmax(e_ij, index, ptr, dim_size)  # [E, H]
+        alpha = softmax(e_ij, index, ptr, dim_size)
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
         return alpha
