@@ -3,10 +3,11 @@ import random
 import logging
 import subprocess
 from pathlib import Path
+from datetime import datetime
 import torch
 from torch_geometric.loader import DataLoader
 from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import Callback
+from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 
 # Add parent directory to path for imports
 import sys
@@ -335,29 +336,75 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
     else:
         raise ValueError(f"Unknown model type: {model_str}")
 
+    # Create timestamp-based directory for this training run
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = Path(save_path) / f"{model_str}_{timestamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Models will be saved to: {run_dir}")
+
+    # Setup best model checkpoint callback
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=str(run_dir),
+        filename="model_best",
+        monitor="val_loss",
+        mode="min",
+        save_top_k=1,
+        verbose=True
+    )
+
     # Create custom progress callback
     progress_callback = CustomProgressCallback(epochs)
 
-    # Create trainer
+    # Create trainer with checkpoint callback
     trainer = Trainer(
         max_epochs=epochs,
         accelerator=accelerator,
         enable_progress_bar=False,  # Disable default progress bar
         enable_model_summary=False,  # Disable model summary
-        callbacks=[progress_callback]  # Use custom progress callback
+        callbacks=[progress_callback, checkpoint_callback]  # Use custom progress and checkpoint callbacks
     )
+
+    # Create a temporary trainer to save initial model
+    temp_trainer = Trainer(accelerator=accelerator, max_epochs=1)
+    # Attach model to trainer by doing a minimal setup
+    temp_trainer.strategy.setup(model)
+    temp_trainer.model = model
+
+    # Save initial model (before training)
+    initial_model_path = run_dir / "model_initial.ckpt"
+    temp_trainer.save_checkpoint(str(initial_model_path))
+    logger.info(f"Initial model saved to: {initial_model_path}")
 
     # Train the model
     trainer.fit(model, train_dataloader, val_dataloader)
 
-    # Save model
-    os.makedirs(f"{save_path}/{model_str}", exist_ok=True)
-    trainer.save_checkpoint(f"{save_path}/{model_str}/model.ckpt")
+    # Save final model (after training)
+    final_model_path = run_dir / "model_final.ckpt"
+    trainer.save_checkpoint(str(final_model_path))
+    logger.info(f"Final model saved to: {final_model_path}")
+
+    # Save model configuration and training info
+    import json
+    config_info = {
+        "model_type": model_str,
+        "loss_type": loss_type,
+        "epochs": epochs,
+        "hyperparameters": hyperparameters,
+        "loss_kwargs": {k: float(v) if hasattr(v, 'item') else v for k, v in loss_kwargs.items()},
+        "timestamp": timestamp,
+        "best_model_path": str(checkpoint_callback.best_model_path) if checkpoint_callback.best_model_path else None
+    }
+
+    with open(run_dir / "training_config.json", 'w') as f:
+        json.dump(config_info, f, indent=2)
+
+    logger.info(f"Training configuration saved to: {run_dir / 'training_config.json'}")
 
     return trainer, model
 
 
-def create_datasets(grid_ts, baseline_se):
+def create_datasets(grid_ts):
     """
     Create datasets from grid and baseline data.
 
@@ -371,7 +418,7 @@ def create_datasets(grid_ts, baseline_se):
     logger.info("Creating PyTorch Geometric datasets...")
 
     # Create datasets from grid and baseline data
-    datasets = grid_ts.create_pyg_data(baseline_se.baseline_se_results_df)
+    datasets = grid_ts.create_pyg_data(grid_ts.values_bus_ts_df)
     train_data, val_data, test_data = datasets[:3]
     x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = datasets[3:]
 
@@ -391,7 +438,7 @@ def create_datasets(grid_ts, baseline_se):
     return train_data, val_data, test_data, normalization_params
 
 
-def create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device):
+def create_datasets_and_loaders(grid_ts, batch_size, device):
     """
     Create PyTorch Geometric datasets and data loaders.
 
@@ -405,7 +452,7 @@ def create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device):
         tuple: (train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data)
     """
     # Create datasets
-    train_data, val_data, test_data, normalization_params = create_datasets(grid_ts, baseline_se)
+    train_data, val_data, test_data, normalization_params = create_datasets(grid_ts)
 
     # Move normalization parameters to device
     normalization_params = {
@@ -427,5 +474,182 @@ def create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device):
     logger.info(f"Validation batches: {len(val_loader)}")
 
     return train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data
+
+
+def load_saved_model(model_dir, model_name="model_best"):
+    """
+    Load a saved model from a timestamped directory.
+
+    Args:
+        model_dir: Path to the model directory (e.g., "gat_dsse_20241127_143022")
+        model_name: Name of the model checkpoint ("model_best", "model_initial", or "model_final")
+
+    Returns:
+        tuple: (model, config_info, normalization_params)
+    """
+    import json
+
+    model_dir = Path(model_dir)
+
+    # Load training configuration
+    config_path = model_dir / "training_config.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Training configuration not found at: {config_path}")
+
+    with open(config_path, 'r') as f:
+        config_info = json.load(f)
+
+    # Determine checkpoint path
+    if model_name == "model_best" and config_info.get("best_model_path"):
+        checkpoint_path = config_info["best_model_path"]
+    else:
+        checkpoint_path = model_dir / f"{model_name}.ckpt"
+
+    if not Path(checkpoint_path).exists():
+        raise FileNotFoundError(f"Model checkpoint not found at: {checkpoint_path}")
+
+    logger.info(f"Loading model from: {checkpoint_path}")
+
+    # Create model instance based on saved configuration
+    model_str = config_info["model_type"]
+    hyperparameters = config_info["hyperparameters"]
+    loss_kwargs = config_info["loss_kwargs"]
+    loss_type = config_info.get("loss_type", "gsp_wls")
+
+    # Note: For evaluation, normalization parameters need to be provided separately
+    # or loaded from the grid_ts that was used for training
+    logger.info(f"Model type: {model_str}")
+    logger.info(f"Loss type: {loss_type}")
+    logger.info(f"Training epochs: {config_info['epochs']}")
+    logger.info(f"Timestamp: {config_info['timestamp']}")
+
+    return checkpoint_path, config_info
+
+
+def evaluate_saved_model(model_dir, grid_ts, test_loader, model_name="model_best"):
+    """
+    Evaluate a saved model on test data.
+
+    Args:
+        model_dir: Path to the model directory
+        grid_ts: Grid time series instance (for normalization parameters)
+        test_loader: Test data loader
+        model_name: Name of the model checkpoint to evaluate
+
+    Returns:
+        tuple: (predictions, model_info)
+    """
+    # Load model configuration
+    checkpoint_path, config_info = load_saved_model(model_dir, model_name)
+
+    # Get normalization parameters from grid_ts
+    # Recreate the same datasets to get normalization params
+    datasets = grid_ts.create_pyg_data(grid_ts.values_bus_ts_df)
+    x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = datasets[3:]
+
+    # Move to device
+    x_set_mean = x_set_mean.to(device)
+    x_set_std = x_set_std.to(device)
+    edge_attr_set_mean = edge_attr_set_mean.to(device)
+    edge_attr_set_std = edge_attr_set_std.to(device)
+
+    # Load the model
+    model_str = config_info["model_type"]
+    loss_kwargs = config_info["loss_kwargs"]
+    loss_type = config_info.get("loss_type", "gsp_wls")
+
+    if model_str.startswith('gat_dsse'):
+        model = GAT_DSSE_Lightning.load_from_checkpoint(
+            checkpoint_path,
+            hyperparameters=config_info["hyperparameters"],
+            x_set_mean=x_set_mean,
+            x_set_std=x_set_std,
+            edge_attr_set_mean=edge_attr_set_mean,
+            edge_attr_set_std=edge_attr_set_std,
+            loss_kwargs=loss_kwargs,
+            time_info=True,
+            loss_type=loss_type,
+            map_location=device
+        )
+    elif model_str == 'bi_level_gat_dsse':
+        model = FAIR_GAT_BILEVEL_Lightning.load_from_checkpoint(
+            checkpoint_path,
+            hyperparameters=config_info["hyperparameters"],
+            x_set_mean=x_set_mean,
+            x_set_std=x_set_std,
+            edge_attr_set_mean=edge_attr_set_mean,
+            edge_attr_set_std=edge_attr_set_std,
+            loss_kwargs=loss_kwargs,
+            time_info=True,
+            loss_type=loss_type,
+            map_location=device
+        )
+    else:
+        raise ValueError(f"Unknown model type: {model_str}")
+
+    # Create trainer for evaluation
+    trainer = Trainer(accelerator=accelerator, enable_progress_bar=False)
+
+    # Run predictions
+    logger.info(f"Evaluating {model_name} model...")
+    predictions = trainer.predict(model, test_loader)
+
+    logger.info(f"Evaluation completed for {model_name} model from {config_info['timestamp']}")
+
+    return predictions, config_info
+
+
+def list_saved_models(models_base_dir):
+    """
+    List all saved models in the models directory.
+
+    Args:
+        models_base_dir: Base directory containing model subdirectories
+
+    Returns:
+        list: List of model directory paths with their information
+    """
+    import json
+
+    models_base_dir = Path(models_base_dir)
+    if not models_base_dir.exists():
+        logger.warning(f"Models directory not found: {models_base_dir}")
+        return []
+
+    model_dirs = []
+    for subdir in models_base_dir.iterdir():
+        if subdir.is_dir():
+            config_path = subdir / "training_config.json"
+            if config_path.exists():
+                try:
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+
+                    # Check which models are available
+                    available_models = []
+                    for model_name in ["model_initial", "model_best", "model_final"]:
+                        if model_name == "model_best" and config.get("best_model_path"):
+                            if Path(config["best_model_path"]).exists():
+                                available_models.append(model_name)
+                        elif (subdir / f"{model_name}.ckpt").exists():
+                            available_models.append(model_name)
+
+                    model_info = {
+                        "directory": str(subdir),
+                        "model_type": config.get("model_type", "unknown"),
+                        "loss_type": config.get("loss_type", "unknown"),
+                        "epochs": config.get("epochs", "unknown"),
+                        "timestamp": config.get("timestamp", "unknown"),
+                        "available_models": available_models
+                    }
+                    model_dirs.append(model_info)
+
+                except Exception as e:
+                    logger.warning(f"Could not read config for {subdir}: {e}")
+
+    # Sort by timestamp (newest first)
+    model_dirs.sort(key=lambda x: x["timestamp"], reverse=True)
+
+    return model_dirs
 
 

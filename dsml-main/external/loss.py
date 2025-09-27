@@ -20,7 +20,7 @@ from src.robusttest.core.SE.pf_funcs import get_pflow, gsp_wls_edge
 # Force CPU usage
 device = torch.device('cpu')
 
-def wls_loss(output, input, edge_input, x_mean, x_std, edge_mean, edge_std, edge_index, reg_coefs, node_param, edge_param):
+def wls_loss(output, input, edge_input, x_mean, x_std, edge_mean, edge_std, edge_index, reg_coefs, node_param, edge_param, lambda_wls):
     """
     Compute Weighted Least Squares (WLS) loss for state estimation.
 
@@ -87,10 +87,10 @@ def wls_loss(output, input, edge_input, x_mean, x_std, edge_mean, edge_std, edge
 
     J_wls = torch.mean(J_sample) + torch.mean(J_sample_edge[J_sample_edge != 0])
 
-    return J_wls
+    return lambda_wls * J_wls
 
 
-def physical_loss(output, x_mean, x_std, edge_index, edge_param, node_param, reg_coefs):
+def physical_loss(output, x_mean, x_std, edge_index, edge_param, node_param, reg_coefs , lambda_physical):
     """
     Compute physical constraint losses for state estimation.
 
@@ -128,10 +128,10 @@ def physical_loss(output, x_mean, x_std, edge_index, edge_param, node_param, reg
     J_loading = reg_coefs['lam_reg'] * torch.mean(torch.relu(loading - 1.5))**2
 
     J_phys = J_v + J_theta + J_loading
-    return J_phys
+    return lambda_physical * J_phys
 
 
-def wls_and_physical_loss(output, input, edge_input, x_mean, x_std, edge_mean, edge_std, edge_index, reg_coefs, node_param, edge_param, lambda_wls=1.0, lambda_physical=1.0):
+def wls_and_physical_loss(output, input, edge_input, x_mean, x_std, edge_mean, edge_std, edge_index, reg_coefs, node_param, edge_param, lambda_wls, lambda_physical):
     """
     Combined WLS and physical constraint loss for state estimation.
 
@@ -154,13 +154,13 @@ def wls_and_physical_loss(output, input, edge_input, x_mean, x_std, edge_mean, e
         tuple: (total_loss, wls_loss, physical_loss)
     """
     # Compute WLS loss
-    wls_loss_val = wls_loss(output, input, edge_input, x_mean, x_std, edge_mean, edge_std, edge_index, reg_coefs, node_param, edge_param)
+    wls_loss_val = wls_loss(output, input, edge_input, x_mean, x_std, edge_mean, edge_std, edge_index, reg_coefs, node_param, edge_param , lambda_wls)
 
     # Compute physical loss
-    physical_loss_val = physical_loss(output, x_mean, x_std, edge_index, edge_param, node_param, reg_coefs)
+    physical_loss_val = physical_loss(output, x_mean, x_std, edge_index, edge_param, node_param, reg_coefs, lambda_physical)
 
     # Combine with weights
-    combined_loss = lambda_wls * wls_loss_val + lambda_physical * physical_loss_val
+    combined_loss = wls_loss_val + physical_loss_val
 
     return combined_loss, wls_loss_val, physical_loss_val
 
