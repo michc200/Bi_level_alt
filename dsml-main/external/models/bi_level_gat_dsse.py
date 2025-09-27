@@ -33,7 +33,7 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
     Follower: even layers -> minimize Physical loss
     """
     def __init__(self, hyperparameters, x_mean, x_std, edge_mean, edge_std, reg_coefs, 
-                 time_info=True, loss_type='gsp_wls', loss_kwargs=None,
+                 time_info=False, loss_type='gsp_wls', loss_kwargs=None,
                  heads=1, concat=True, slope=0.2, self_loops=True, dropout=0.0,
                  nonlin='leaky_relu', fairness_alpha=100.0,
                  lr_g=1e-5, lr_f=1e-4, weight_decay=1e-6,  # Reduced learning rates
