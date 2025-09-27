@@ -66,7 +66,7 @@ BASE_DIR = SCRIPT_DIR.parent / "dsml-data"
 GRID_TS_DIR = BASE_DIR / "grid-time-series"
 BASELINE_SE_DIR = BASE_DIR / "baseline-state-estimation"
 DATASET_DIR = BASE_DIR / "datasets"
-MODEL_DIR = SCRIPT_DIR / "models"  # Save models inside dsml-main
+MODEL_DIR = SCRIPT_DIR.parent / "dsml-model"  # Save models inside dsml-main
 PLOTS_DIR = SCRIPT_DIR.parent / "plots"
 
 # Create directories

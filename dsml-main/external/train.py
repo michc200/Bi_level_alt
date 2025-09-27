@@ -5,12 +5,10 @@ Training utilities for DSML State Estimation
 This module contains functions and classes for training state estimation models.
 """
 
-import os
 import logging
 from pathlib import Path
 from datetime import datetime
 import torch
-from torch_geometric.loader import DataLoader
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 
@@ -123,7 +121,7 @@ class CustomProgressCallback(Callback):
         super().__init__()
         self.total_epochs = total_epochs
 
-    def on_validation_epoch_end(self, trainer, pl_module):
+    def on_validation_epoch_end(self, trainer, _pl_module):
         """Called at the end of each validation epoch to show both train and val losses."""
         current_epoch = trainer.current_epoch + 1
 
@@ -205,6 +203,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
     logger.info(f"Creating {model_str} model with {loss_type} loss")
 
     if model_str.startswith('gat_dsse'):
+        MyLightningModule = GAT_DSSE_Lightning
         model = GAT_DSSE_Lightning(
             hyperparameters, x_set_mean, x_set_std,
             edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
@@ -212,6 +211,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
         )
 
     elif model_str == 'bi_level_gat_dsse':
+        MyLightningModule = FAIR_GAT_BILEVEL_Lightning
         model = FAIR_GAT_BILEVEL_Lightning(
             hyperparameters, x_set_mean, x_set_std,
             edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
@@ -223,7 +223,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
 
     # Create timestamp-based directory for this training run
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = Path(save_path) / f"{model_str}_{timestamp}"
+    run_dir = Path(save_path) / model_str / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Models will be saved to: {run_dir}")
@@ -231,7 +231,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
     # Setup best model checkpoint callback
     checkpoint_callback = ModelCheckpoint(
         dirpath=str(run_dir),
-        filename="model_best",
+        filename="best",
         monitor="val_loss",
         mode="min",
         save_top_k=1,
@@ -241,7 +241,30 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
     # Create custom progress callback
     progress_callback = CustomProgressCallback(epochs)
 
-    # Create trainer with checkpoint callback
+    # Step 1: Create trainer for initial checkpoint (0 epochs)
+    initial_trainer = Trainer(
+        max_epochs=0,
+        accelerator=accelerator,
+        enable_progress_bar=False,
+        enable_model_summary=False
+    )
+
+    # Train for 0 epochs to create initial checkpoint
+    logger.info("Creating initial model checkpoint...")
+    initial_trainer.fit(model, train_dataloader, val_dataloader)
+
+    # Save initial model checkpoint
+    initial_model_path = run_dir / "init.ckpt"
+    initial_trainer.save_checkpoint(str(initial_model_path))
+    logger.info(f"Initial model saved to: {initial_model_path}")
+
+    # Step 2: Load from initial checkpoint and train for full epochs
+    logger.info("Loading from initial checkpoint and starting full training...")
+
+    model = MyLightningModule.load_from_checkpoint(f"{initial_model_path}")
+
+
+    # Create trainer for full training with checkpoint callback
     trainer = Trainer(
         max_epochs=epochs,
         accelerator=accelerator,
@@ -250,203 +273,19 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
         callbacks=[progress_callback, checkpoint_callback]  # Use custom progress and checkpoint callbacks
     )
 
-    # Save initial model (before training)
-    initial_model_path = run_dir / "model_initial.ckpt"
-    logger.info(f"Initial model saved to: {initial_model_path}")
-
-    # Train the model
+    # Train the model for full epochs
     trainer.fit(model, train_dataloader, val_dataloader)
 
     # Save final model (after training)
-    final_model_path = run_dir / "model_final.ckpt"
+    final_model_path = run_dir / "final.ckpt"
     trainer.save_checkpoint(str(final_model_path))
     logger.info(f"Final model saved to: {final_model_path}")
 
-    # Save model configuration and training info
-    import json
-    config_info = {
-        "model_type": model_str,
-        "loss_type": loss_type,
-        "epochs": epochs,
-        "hyperparameters": hyperparameters,
-        "loss_kwargs": {k: float(v) if hasattr(v, 'item') else v for k, v in loss_kwargs.items()},
-        "timestamp": timestamp,
-        "best_model_path": str(checkpoint_callback.best_model_path) if checkpoint_callback.best_model_path else None
-    }
-
-    with open(run_dir / "training_config.json", 'w') as f:
-        json.dump(config_info, f, indent=2)
-
-    logger.info(f"Training configuration saved to: {run_dir / 'training_config.json'}")
 
     return trainer, model
 
 
-def load_saved_model(model_dir, model_name="model_best"):
-    """
-    Load a saved model from a timestamped directory.
-
-    Args:
-        model_dir: Path to the model directory (e.g., "gat_dsse_20241127_143022")
-        model_name: Name of the model checkpoint ("model_best", "model_initial", or "model_final")
-
-    Returns:
-        tuple: (checkpoint_path, config_info)
-    """
-    import json
-
-    model_dir = Path(model_dir)
-
-    # Load training configuration
-    config_path = model_dir / "training_config.json"
-    if not config_path.exists():
-        raise FileNotFoundError(f"Training configuration not found at: {config_path}")
-
-    with open(config_path, 'r') as f:
-        config_info = json.load(f)
-
-    # Determine checkpoint path
-    if model_name == "model_best" and config_info.get("best_model_path"):
-        checkpoint_path = config_info["best_model_path"]
-    else:
-        checkpoint_path = model_dir / f"{model_name}.ckpt"
-
-    if not Path(checkpoint_path).exists():
-        raise FileNotFoundError(f"Model checkpoint not found at: {checkpoint_path}")
-
-    logger.info(f"Loading model from: {checkpoint_path}")
-
-    # Log model information
-    logger.info(f"Model type: {config_info['model_type']}")
-    logger.info(f"Loss type: {config_info.get('loss_type', 'gsp_wls')}")
-    logger.info(f"Training epochs: {config_info['epochs']}")
-    logger.info(f"Timestamp: {config_info['timestamp']}")
-
-    return checkpoint_path, config_info
 
 
-def evaluate_saved_model(model_dir, grid_ts, test_loader, model_name="model_best"):
-    """
-    Evaluate a saved model on test data.
-
-    Args:
-        model_dir: Path to the model directory
-        grid_ts: Grid time series instance (for normalization parameters)
-        test_loader: Test data loader
-        model_name: Name of the model checkpoint to evaluate
-
-    Returns:
-        tuple: (predictions, model_info)
-    """
-    # Load model configuration
-    checkpoint_path, config_info = load_saved_model(model_dir, model_name)
-
-    # Get normalization parameters from grid_ts
-    # Recreate the same datasets to get normalization params
-    datasets = grid_ts.create_pyg_data(grid_ts.values_bus_ts_df)
-    x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = datasets[3:]
-
-    # Move to device
-    x_set_mean = x_set_mean.to(device)
-    x_set_std = x_set_std.to(device)
-    edge_attr_set_mean = edge_attr_set_mean.to(device)
-    edge_attr_set_std = edge_attr_set_std.to(device)
-
-    # Load the model
-    model_str = config_info["model_type"]
-    loss_kwargs = config_info["loss_kwargs"]
-    loss_type = config_info.get("loss_type", "gsp_wls")
-
-    if model_str.startswith('gat_dsse'):
-        model = GAT_DSSE_Lightning.load_from_checkpoint(
-            checkpoint_path,
-            hyperparameters=config_info["hyperparameters"],
-            x_set_mean=x_set_mean,
-            x_set_std=x_set_std,
-            edge_attr_set_mean=edge_attr_set_mean,
-            edge_attr_set_std=edge_attr_set_std,
-            loss_kwargs=loss_kwargs,
-            time_info=True,
-            loss_type=loss_type,
-            map_location=device
-        )
-    elif model_str == 'bi_level_gat_dsse':
-        model = FAIR_GAT_BILEVEL_Lightning.load_from_checkpoint(
-            checkpoint_path,
-            hyperparameters=config_info["hyperparameters"],
-            x_set_mean=x_set_mean,
-            x_set_std=x_set_std,
-            edge_attr_set_mean=edge_attr_set_mean,
-            edge_attr_set_std=edge_attr_set_std,
-            loss_kwargs=loss_kwargs,
-            time_info=True,
-            loss_type=loss_type,
-            map_location=device
-        )
-    else:
-        raise ValueError(f"Unknown model type: {model_str}")
-
-    # Create trainer for evaluation
-    trainer = Trainer(accelerator=accelerator, enable_progress_bar=False)
-
-    # Run predictions
-    logger.info(f"Evaluating {model_name} model...")
-    predictions = trainer.predict(model, test_loader)
-
-    logger.info(f"Evaluation completed for {model_name} model from {config_info['timestamp']}")
-
-    return predictions, config_info
 
 
-def list_saved_models(models_base_dir):
-    """
-    List all saved models in the models directory.
-
-    Args:
-        models_base_dir: Base directory containing model subdirectories
-
-    Returns:
-        list: List of model directory paths with their information
-    """
-    import json
-
-    models_base_dir = Path(models_base_dir)
-    if not models_base_dir.exists():
-        logger.warning(f"Models directory not found: {models_base_dir}")
-        return []
-
-    model_dirs = []
-    for subdir in models_base_dir.iterdir():
-        if subdir.is_dir():
-            config_path = subdir / "training_config.json"
-            if config_path.exists():
-                try:
-                    with open(config_path, 'r') as f:
-                        config = json.load(f)
-
-                    # Check which models are available
-                    available_models = []
-                    for model_name in ["model_initial", "model_best", "model_final"]:
-                        if model_name == "model_best" and config.get("best_model_path"):
-                            if Path(config["best_model_path"]).exists():
-                                available_models.append(model_name)
-                        elif (subdir / f"{model_name}.ckpt").exists():
-                            available_models.append(model_name)
-
-                    model_info = {
-                        "directory": str(subdir),
-                        "model_type": config.get("model_type", "unknown"),
-                        "loss_type": config.get("loss_type", "unknown"),
-                        "epochs": config.get("epochs", "unknown"),
-                        "timestamp": config.get("timestamp", "unknown"),
-                        "available_models": available_models
-                    }
-                    model_dirs.append(model_info)
-
-                except Exception as e:
-                    logger.warning(f"Could not read config for {subdir}: {e}")
-
-    # Sort by timestamp (newest first)
-    model_dirs.sort(key=lambda x: x["timestamp"], reverse=True)
-
-    return model_dirs
