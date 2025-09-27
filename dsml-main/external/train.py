@@ -282,7 +282,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
     logger.info(f"Final model saved to: {final_model_path}")
 
 
-    return trainer, model
+    return trainer, model, str(run_dir)
 
 
 

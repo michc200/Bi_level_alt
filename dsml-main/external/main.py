@@ -18,7 +18,11 @@ from external.utils import (
     create_datasets_and_loaders
 )
 from external.train import train_se_methods
-from external.evaluate import evaluate_model, calculate_evaluation_metrics
+from external.evaluate import (
+    load_model_from_cpkt_file,
+    generate_test_dataframes,
+    print_evaluation_metrics
+)
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -39,25 +43,25 @@ device = torch.device('cpu')
 ################################################################################
 
 # Grid Parameters
-GRID_CODE = "1-LV-rural1--0-sw" # '1-MV-urban--0-sw' # 1-LV-rural1--0-sw
+GRID_CODE = "1-MV-urban--0-sw" # '1-MV-urban--0-sw' # 1-LV-rural1--0-sw
 ERROR_TYPE = 'no_errors'
-MEASUREMENT_RATE = 0.9
+MEASUREMENT_RATE = 1
 SEED = 15
 
 # Model Parameters
 MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'bi_level_gat_dsse'
-EPOCHS = 20
+EPOCHS = 10
 BATCH_SIZE = 64
 
 # Loss Configuration
 LOSS_TYPE = 'wls_and_physical'  # Options: 'wls', 'physical', 'wls_and_physical', 'mse'
 LOSS_KWARGS = {
-    "lambda_physical" : 0,
+    "lambda_physical" : 1,
     "lambda_wls" : 1,
     'lam_v': 1,
-    'lam_p': 0.025,
-    'lam_pf': 0.025,
-    'lam_reg': 1,
+    'lam_p': 1,
+    'lam_pf': 1,
+    'lam_reg': 0.8,
 }
 
 # Directory Setup (relative to main.py location)
@@ -144,7 +148,7 @@ logger.info(f"Epochs: {EPOCHS}")
 logger.info(f"Device: {device}")
 
 # Train the model
-trainer, model = train_se_methods(
+trainer, model, model_dir = train_se_methods(
     net=grid_ts.net,
     train_dataloader=train_loader,
     val_dataloader=val_loader,
@@ -157,31 +161,42 @@ trainer, model = train_se_methods(
 )
 
 logger.info("Model training completed!")
-logger.info(f"Model saved to: {MODEL_DIR / MODEL_TYPE}")
+logger.info(f"Model saved to: {model_dir}")
 
 ################################################################################
-#### Model Evaluation and Visualization
+#### Model Evaluation 
 ################################################################################
 
-# Run complete evaluation pipeline with detailed metrics
-test_results_df, test_baseline, test_measurements, test_true, detailed_metrics, plot_path, rmse_plot_path = evaluate_model(
-    trainer, model, test_loader, grid_ts, baseline_se, train_data, val_data,
-    MODEL_TYPE, GRID_CODE, MEASUREMENT_RATE, PLOTS_DIR,
-    device=device
+logger.info("="*80)
+logger.info("ADDITIONAL MODEL EVALUATION")
+logger.info("="*80)
+
+# Model paths - using the trained model from this session
+model_dir_path = Path(model_dir)
+init_model_path = model_dir_path / "init.ckpt"
+final_model_path = model_dir_path / "final.ckpt"
+
+# Load models for comparison
+initial_model = load_model_from_cpkt_file(cpkt_path=str(init_model_path))
+final_model = load_model_from_cpkt_file(cpkt_path=str(final_model_path))
+
+# Generate test dataframes for comparison
+test_results_initial, _, _, _ = generate_test_dataframes(
+    test_loader=test_loader,
+    model=initial_model,
+    grid_ts=grid_ts,
+    baseline_se=None
 )
 
-# Calculate additional evaluation metrics using the created test datasets
-metrics = calculate_evaluation_metrics(
-    test_results_df, test_baseline, test_true
+test_results, test_baseline, test_measurements, test_true = generate_test_dataframes(
+    test_loader=test_loader,
+    model=final_model,
+    grid_ts=grid_ts,
+    baseline_se=None
 )
 
-# Print detailed metrics summary
-logger.info("="*80)
-logger.info("DETAILED METRICS SUMMARY")
-logger.info("="*80)
-logger.info(f"Voltage Magnitude - RMSE: {detailed_metrics['rmse_v']:.6f}, MAE: {detailed_metrics['mae_v']:.6f}")
-logger.info(f"Voltage Angle - RMSE: {detailed_metrics['rmse_th']:.6f}, MAE: {detailed_metrics['mae_th']:.6f}")
-logger.info(f"Line Loading - RMSE: {detailed_metrics['rmse_loading']:.6f}, MAE: {detailed_metrics['mae_loading']:.6f}")
-logger.info(f"Trafo Loading - RMSE: {detailed_metrics['rmse_loading_trafos']:.6f}, MAE: {detailed_metrics['mae_loading_trafos']:.6f}")
-logger.info(f"Std Proportion - V: {detailed_metrics['prop_std_v']:.2f}%, Th: {detailed_metrics['prop_std_th']:.2f}%")
+# Print comprehensive evaluation metrics with histograms
+print_evaluation_metrics(test_results, test_results_initial, test_true)
+
+logger.info("Complete evaluation pipeline finished!")
 
