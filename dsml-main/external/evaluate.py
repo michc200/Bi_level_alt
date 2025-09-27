@@ -17,7 +17,7 @@ from pytorch_lightning import Trainer
 
 
 from external.models.gat_dsse import GAT_DSSE_Lightning
-from external.models.bi_level_gat_dsse import FAIR_GAT_BILEVEL_Lightning
+from external.models.bi_level_gat_dsse import FAIR_GAT_BILEVEL_Lightning_Stable
 
 # Add parent directory to path for imports
 import sys
@@ -88,9 +88,9 @@ def load_model_from_cpkt_file(cpkt_path):
     if cpkt_path.parent.parent.name == "gat_dsse":
         LightningModule = GAT_DSSE_Lightning
     elif cpkt_path.parent.parent.name == "bi_level_gat_dsse":
-        LightningModule = FAIR_GAT_BILEVEL_Lightning
+        LightningModule = FAIR_GAT_BILEVEL_Lightning_Stable
     else:
-        raise ValueError(f"Unknown model type: {cpkt_path.parent.name}")
+        raise ValueError(f"Unknown model type: {cpkt_path.parent.parent.name}")
     
     model = LightningModule.load_from_checkpoint(str(cpkt_path))
 

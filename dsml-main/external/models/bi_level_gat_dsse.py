@@ -3,17 +3,27 @@ import torch.nn as nn
 from typing import Optional
 
 import pytorch_lightning as pl
-from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
-from torch_geometric.nn import GATv2Conv, Sequential
+from torch.optim import Adam, Adamax
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch_geometric.nn.conv import GATv2Conv
+from torch_geometric.nn import GATv2Conv, Sequential
 from torch_geometric.typing import OptTensor
 from torch_geometric.utils import softmax
 from torch import Tensor
 import torch.nn.functional as F
-from torch_geometric.nn.pool import avg_pool_neighbor_x
+from torch.nn import LeakyReLU, Linear
+from torch.nn.functional import mse_loss
+
+# Add path for external imports
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 from external.loss import wls_loss, physical_loss, wls_and_physical_loss
+from external.plot_utils import init_live_plot, update_live_plot, finalize_live_plot
+import logging
+
+logger = logging.getLogger("FAIR_GAT_BILEVEL")
 
 
 class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
@@ -72,12 +82,28 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
             time_feat_dim=time_feat_dim)
 
         # Data normalization / reg
-        self.x_mean = x_mean
-        self.x_std = x_std
-        self.edge_mean = edge_mean
-        self.edge_std = edge_std
-        self.reg_coefs = reg_coefs
+        self.x_mean = torch.tensor(x_mean)
+        self.x_std = torch.tensor(x_std)
+        self.edge_mean = torch.tensor(edge_mean)
+        self.edge_std = torch.tensor(edge_std)
+
+        # Extract reg_coefs from the unified loss_kwargs structure
+        self.reg_coefs = {k: v for k, v in reg_coefs.items() if k not in ['lambda_wls', 'lambda_physical']}
+
+        self.lr = lr_g  # Use leader learning rate as base
+        self.time_info = time_info
         self.use_time_info = time_info
+
+        # Loss configuration
+        self.loss_type = loss_type  # Options: 'gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse'
+        self.loss_kwargs = loss_kwargs if loss_kwargs is not None else {}
+
+        # Loss tracker
+        self.train_loss = []
+        self.val_loss = []
+
+        # Live plotting
+        self.live_plot_initialized = False
 
         # Collect parameters more carefully
         self.leader_params = []
@@ -122,6 +148,7 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
             x_nodes_gnn = torch.cat([x_nodes_gnn, time_info], dim=1)
 
         return self.model(x_nodes_gnn, edge_index, edge_input)
+
     
     def clip_loss(self, loss):
         """Clip loss values to prevent explosion"""
@@ -151,7 +178,8 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
         follower_loss = physical_loss(
             output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
             edge_index=edge_index, edge_param=edge_param,
-            node_param=node_param, reg_coefs=self.reg_coefs)
+            node_param=node_param, reg_coefs=self.reg_coefs,
+            lambda_physical=self.loss_kwargs.get('lambda_physical', 1.0))
 
         # sanitize numeric issues and use non-trainable fallback if needed
         if not (torch.isnan(follower_loss) or torch.isinf(follower_loss)):
@@ -172,7 +200,8 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
             x_mean=self.x_mean, x_std=self.x_std,
             edge_mean=self.edge_mean, edge_std=self.edge_std,
             edge_index=edge_index, reg_coefs=self.reg_coefs,
-            node_param=node_param, edge_param=edge_param)
+            node_param=node_param, edge_param=edge_param,
+            lambda_wls=self.loss_kwargs.get('lambda_wls', 1.0))
 
         if not (torch.isnan(leader_loss) or torch.isinf(leader_loss)):
             leader_loss.backward()
@@ -209,13 +238,27 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
             x, edge_index, edge_input, node_param, edge_param, num_samples, k_follower=k_follower
         )
 
+        # Initialize live plot on first training step
+        if not self.live_plot_initialized:
+            try:
+                metrics_structure = [
+                    {'train_loss': 0, 'val_loss': 0},
+                    {'train_wls': 0, 'val_wls': 0},
+                    {'train_physical': 0, 'val_physical': 0}
+                ]
+                init_live_plot(metrics_structure)
+                self.live_plot_initialized = True
+                logger.info("Live plotting initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize live plot: {e}")
+
         # Log with finite check
         if torch.isfinite(total_loss):
-            self.log("train_total_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True)
+            self.log("train_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         if torch.isfinite(leader_loss):
-            self.log("train_wls_loss", leader_loss, on_step=True, on_epoch=True)
+            self.log("train_wls", leader_loss, on_step=True, on_epoch=True, logger=True)
         if torch.isfinite(follower_loss):
-            self.log("train_phys_loss", follower_loss, on_step=True, on_epoch=True)
+            self.log("train_physical", follower_loss, on_step=True, on_epoch=True, logger=True)
 
         # Log learning rates
         self.log("lr_leader", self.optimizer_G.param_groups[0]['lr'], on_step=True)
@@ -246,12 +289,14 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
 
             follower_loss = physical_loss(output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
                                         edge_index=edge_index, edge_param=edge_param,
-                                        node_param=node_param, reg_coefs=self.reg_coefs)
+                                        node_param=node_param, reg_coefs=self.reg_coefs,
+                                        lambda_physical=self.loss_kwargs.get('lambda_physical', 1.0))
             leader_loss = wls_loss(output=y_pred, input=x_gnn, edge_input=edge_input,
                                  x_mean=self.x_mean, x_std=self.x_std,
                                  edge_mean=self.edge_mean, edge_std=self.edge_std,
                                  edge_index=edge_index, reg_coefs=self.reg_coefs,
-                                 node_param=node_param, edge_param=edge_param)
+                                 node_param=node_param, edge_param=edge_param,
+                                 lambda_wls=self.loss_kwargs.get('lambda_wls', 1.0))
             
             # Clip validation losses too
             follower_loss = self.clip_loss(follower_loss)
@@ -259,17 +304,62 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
             total_loss = leader_loss + follower_loss
 
             if torch.isfinite(total_loss):
-                self.log("val_total_loss", total_loss, on_step=False, on_epoch=True, prog_bar=True)
+                self.log("val_loss", total_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
             if torch.isfinite(leader_loss):
-                self.log("val_wls_loss", leader_loss, on_step=False, on_epoch=True)
+                self.log("val_wls", leader_loss, on_step=False, on_epoch=True, logger=True)
             if torch.isfinite(follower_loss):
-                self.log("val_phys_loss", follower_loss, on_step=False, on_epoch=True)
+                self.log("val_physical", follower_loss, on_step=False, on_epoch=True, logger=True)
 
         except Exception as e:
             print(f"Error in validation step: {e}")
             total_loss = torch.tensor(self.loss_clip_val, device=x.device)
 
         return total_loss
+
+    def on_validation_epoch_end(self):
+        """Update live plot at the end of each validation epoch."""
+        if self.live_plot_initialized:
+            try:
+                # Get current epoch losses
+                train_loss = self.trainer.logged_metrics.get('train_loss_epoch', None)
+                val_loss = self.trainer.logged_metrics.get('val_loss', None)
+                train_wls = self.trainer.logged_metrics.get('train_wls_epoch', None)
+                val_wls = self.trainer.logged_metrics.get('val_wls', None)
+                train_physical = self.trainer.logged_metrics.get('train_physical_epoch', None)
+                val_physical = self.trainer.logged_metrics.get('val_physical', None)
+
+                metrics_list = []
+                current_epoch = self.current_epoch
+
+                # Always provide all three subplots to maintain consistency
+                # Subplot 1: Total Loss
+                total_loss_dict = {}
+                if train_loss is not None:
+                    total_loss_dict['train_loss'] = float(train_loss.cpu())
+                if val_loss is not None:
+                    total_loss_dict['val_loss'] = float(val_loss.cpu())
+                metrics_list.append(total_loss_dict)
+
+                # Subplot 2: WLS Loss
+                wls_loss_dict = {}
+                if train_wls is not None:
+                    wls_loss_dict['train_wls'] = float(train_wls.cpu())
+                if val_wls is not None:
+                    wls_loss_dict['val_wls'] = float(val_wls.cpu())
+                metrics_list.append(wls_loss_dict)
+
+                # Subplot 3: Physical Loss
+                physical_loss_dict = {}
+                if train_physical is not None:
+                    physical_loss_dict['train_physical'] = float(train_physical.cpu())
+                if val_physical is not None:
+                    physical_loss_dict['val_physical'] = float(val_physical.cpu())
+                metrics_list.append(physical_loss_dict)
+
+                if metrics_list:
+                    update_live_plot(current_epoch, metrics_list)
+            except Exception as e:
+                logger.warning(f"Failed to update live plot: {e}")
 
     def predict_step(self, batch, batch_idx):
         x = batch.x.clone()
@@ -290,6 +380,15 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
         theta_i = y_pred[:, 1:] * self.x_std[2:3] + self.x_mean[2:3]
         theta_i = theta_i*(1.- node_param[:,1:2])
         return v_i, theta_i
+
+    def on_train_end(self):
+        """Finalize live plot when training ends."""
+        if self.live_plot_initialized:
+            try:
+                finalize_live_plot()
+                logger.info("Live plotting finalized")
+            except Exception as e:
+                logger.warning(f"Failed to finalize live plot: {e}")
 
     def configure_optimizers(self):
         return (
