@@ -40,7 +40,7 @@ device = torch.device('cpu')
 ################################################################################
 
 # Grid Parameters
-GRID_CODE = '1-LV-rural1--0-sw' # "1-LV-rural1--0-sw" # '1-MV-urban--0-sw' # 1-LV-rural1--0-sw
+GRID_CODE = '1-MV-urban--0-sw' # "1-LV-rural1--0-sw" # '1-MV-urban--0-sw'
 ERROR_TYPE = 'no_errors'
 MEASUREMENT_RATE = 0.9
 SEED = 15
