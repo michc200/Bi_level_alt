@@ -15,11 +15,14 @@ sys.path.append(str(Path(__file__).parent.parent))
 from external.utils import (
     load_or_create_grid_ts,
     load_or_create_baseline_se,
-    create_datasets_and_loaders,
-    train_se_methods,
-    process_test_results
+    create_datasets_and_loaders
 )
-from external.plot_utils import plot_state_estimation_results
+from external.train import train_se_methods
+from external.evaluate import (
+    load_model_from_cpkt_file,
+    generate_test_dataframes,
+    print_evaluation_metrics
+)
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -40,24 +43,24 @@ device = torch.device('cpu')
 ################################################################################
 
 # Grid Parameters
-GRID_CODE = '1-MV-urban--0-sw' # "1-LV-rural1--0-sw" # '1-MV-urban--0-sw'
+GRID_CODE = "1-LV-rural1--0-sw" # '1-MV-urban--0-sw' # 1-LV-rural1--0-sw
 ERROR_TYPE = 'no_errors'
 MEASUREMENT_RATE = 0.9
 SEED = 15
 
 # Model Parameters
 MODEL_TYPE = 'bi_level_gat_dsse'  # Options: 'gat_dsse', 'bi_level_gat_dsse'
-EPOCHS = 2
+EPOCHS = 100
 BATCH_SIZE = 64
 
 # Loss Configuration
 LOSS_TYPE = 'wls_and_physical'  # Options: 'wls', 'physical', 'wls_and_physical', 'mse'
 LOSS_KWARGS = {
-    'lambda_wls': 1,        # Weight for WLS loss component
-    'lambda_physical': 1,   # Weight for physical constraint loss component
-    'lam_v': 1, #1e-4
-    'lam_p': 1, #1e-8
-    'lam_pf': 1, #1e-6
+    "lambda_physical" : 1,
+    "lambda_wls" : 1,
+    'lam_v': 1,
+    'lam_p': 1,
+    'lam_pf': 1,
     'lam_reg': 0.8,
 }
 
@@ -67,7 +70,7 @@ BASE_DIR = SCRIPT_DIR.parent / "dsml-data"
 GRID_TS_DIR = BASE_DIR / "grid-time-series"
 BASELINE_SE_DIR = BASE_DIR / "baseline-state-estimation"
 DATASET_DIR = BASE_DIR / "datasets"
-MODEL_DIR = SCRIPT_DIR.parent / "dsml-models"
+MODEL_DIR = SCRIPT_DIR.parent / "dsml-model"  # Save models inside dsml-main
 PLOTS_DIR = SCRIPT_DIR.parent / "plots"
 
 # Create directories
@@ -96,6 +99,7 @@ grid_id = f"GRID-{GRID_CODE}__MEAS_RATE-{MEASUREMENT_RATE}__ERROR-{ERROR_TYPE}__
 grid_save_path = GRID_TS_DIR / grid_id
 grid_ts = load_or_create_grid_ts(GRID_CODE, grid_save_path, MEASUREMENT_RATE)
 
+# grid_ts.plot()
 logger.info("Grid loaded successfully!")
 logger.info(f"Buses: {len(grid_ts.net.bus)}")
 logger.info(f"Lines: {len(grid_ts.net.line)}")
@@ -105,17 +109,17 @@ logger.info(f"Time steps: {len(grid_ts.profiles[('load', 'p_mw')])}")
 #### Baseline State Estimation
 ################################################################################
 
-logger.info("="*80)
-logger.info("BASELINE STATE ESTIMATION")
-logger.info("="*80)
+# logger.info("="*80)
+# logger.info("BASELINE STATE ESTIMATION")
+# logger.info("="*80)
 
-# Load or create baseline state estimation
-baseline_save_path = BASELINE_SE_DIR / grid_id
-baseline_se = load_or_create_baseline_se(grid_save_path, baseline_save_path, n_jobs=18)
-
-logger.info("Baseline state estimation loaded!")
-logger.info(f"Time steps processed: {len(baseline_se.baseline_se_results_df)}")
-logger.info(f"Variables per time step: {len(baseline_se.baseline_se_results_df.columns)}")
+# # Load or create baseline state estimation
+# baseline_save_path = BASELINE_SE_DIR / grid_id
+# baseline_se = load_or_create_baseline_se(grid_save_path, baseline_save_path, n_jobs=18)
+baseline_se = None
+# logger.info("Baseline state estimation loaded!")
+# logger.info(f"Time steps processed: {len(baseline_se.baseline_se_results_df)}")
+# logger.info(f"Variables per time step: {len(baseline_se.baseline_se_results_df.columns)}")
 
 ################################################################################
 #### Dataset Creation
@@ -127,7 +131,7 @@ logger.info("="*80)
 
 # Create datasets and data loaders
 train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data = create_datasets_and_loaders(
-    grid_ts, baseline_se, BATCH_SIZE, device
+    grid_ts, BATCH_SIZE, device
 )
 
 ################################################################################
@@ -144,7 +148,7 @@ logger.info(f"Epochs: {EPOCHS}")
 logger.info(f"Device: {device}")
 
 # Train the model
-trainer, model = train_se_methods(
+trainer, model, model_dir = train_se_methods(
     net=grid_ts.net,
     train_dataloader=train_loader,
     val_dataloader=val_loader,
@@ -157,41 +161,42 @@ trainer, model = train_se_methods(
 )
 
 logger.info("Model training completed!")
-logger.info(f"Model saved to: {MODEL_DIR / MODEL_TYPE}")
+logger.info(f"Model saved to: {model_dir}")
 
 ################################################################################
-#### Model Evaluation
-################################################################################
-
-logger.info("="*80)
-logger.info("MODEL EVALUATION")
-logger.info("="*80)
-
-logger.info("Running model evaluation on test set...")
-
-# Run prediction on test data
-test_results = trainer.predict(model, test_loader)
-
-# Process results into DataFrame
-test_results_df = process_test_results(test_results, grid_ts)
-results_path = BASE_DIR / "test_results" / f"{grid_id}__{MODEL_TYPE}_{EPOCHS}_epochs.csv"
-results_path.parent.mkdir(parents=True, exist_ok=True)
-
-test_results_df.to_csv(results_path, index=False)
-logger.info(f"Test results saved to: {results_path}")
-logger.info("Evaluation completed!")
-
-################################################################################
-#### Results Visualization
+#### Model Evaluation 
 ################################################################################
 
 logger.info("="*80)
-logger.info("RESULTS VISUALIZATION")
+logger.info("ADDITIONAL MODEL EVALUATION")
 logger.info("="*80)
 
-# Create state estimation results visualization
-plot_path = plot_state_estimation_results(
-    test_results_df, baseline_se, grid_ts, train_data, val_data,
-    MODEL_TYPE, GRID_CODE, MEASUREMENT_RATE, PLOTS_DIR
+# Model paths - using the trained model from this session
+model_dir_path = Path(model_dir)
+init_model_path = model_dir_path / "init.ckpt"
+final_model_path = model_dir_path / "final.ckpt"
+
+# Load models for comparison
+initial_model = load_model_from_cpkt_file(cpkt_path=str(init_model_path))
+final_model = load_model_from_cpkt_file(cpkt_path=str(final_model_path))
+
+# Generate test dataframes for comparison
+test_results_initial, _, _, _ = generate_test_dataframes(
+    test_loader=test_loader,
+    model=initial_model,
+    grid_ts=grid_ts,
+    baseline_se=None
 )
+
+test_results, test_baseline, test_measurements, test_true = generate_test_dataframes(
+    test_loader=test_loader,
+    model=final_model,
+    grid_ts=grid_ts,
+    baseline_se=None
+)
+
+# Print comprehensive evaluation metrics with histograms
+print_evaluation_metrics(test_results, test_results_initial, test_true)
+
+logger.info("Complete evaluation pipeline finished!")
 

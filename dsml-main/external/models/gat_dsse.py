@@ -107,13 +107,15 @@ class GAT_DSSE_Lightning(pl.LightningModule):
 
         # x_nodes = x[:,:self.num_nfeat]
 
-        loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
+        loss, wls_loss, physical_loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
 
         # Initialize live plot on first training step
         if not self.live_plot_initialized:
             try:
                 metrics_structure = [
-                    {'train_loss': 0, 'val_loss': 0}
+                    {'train_loss': 0, 'val_loss': 0},
+                    {'train_wls': 0, 'val_wls': 0},
+                    {'train_physical': 0, 'val_physical': 0}
                 ]
                 init_live_plot(metrics_structure)
                 self.live_plot_initialized = True
@@ -122,6 +124,10 @@ class GAT_DSSE_Lightning(pl.LightningModule):
                 logger.warning(f"Failed to initialize live plot: {e}")
 
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        if wls_loss is not None:
+            self.log("train_wls", wls_loss, on_step=True, on_epoch=True, logger=True)
+        if physical_loss is not None:
+            self.log("train_physical", physical_loss, on_step=True, on_epoch=True, logger=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -148,9 +154,13 @@ class GAT_DSSE_Lightning(pl.LightningModule):
 
         # x_nodes = x[:,:self.num_nfeat]
         # Calculate loss based on the selected method
-        loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
+        loss, wls_loss, physical_loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
 
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        if wls_loss is not None:
+            self.log("val_wls", wls_loss, on_step=False, on_epoch=True, logger=True)
+        if physical_loss is not None:
+            self.log("val_physical", physical_loss, on_step=False, on_epoch=True, logger=True)
         return loss
 
     def on_validation_epoch_end(self):
@@ -160,13 +170,38 @@ class GAT_DSSE_Lightning(pl.LightningModule):
                 # Get current epoch losses
                 train_loss = self.trainer.logged_metrics.get('train_loss_epoch', None)
                 val_loss = self.trainer.logged_metrics.get('val_loss', None)
+                train_wls = self.trainer.logged_metrics.get('train_wls_epoch', None)
+                val_wls = self.trainer.logged_metrics.get('val_wls', None)
+                train_physical = self.trainer.logged_metrics.get('train_physical_epoch', None)
+                val_physical = self.trainer.logged_metrics.get('val_physical', None)
 
                 metrics_list = []
                 current_epoch = self.current_epoch
 
-                # Loss subplot
-                if train_loss is not None and val_loss is not None:
-                    metrics_list.append({'train_loss': float(train_loss.cpu()), 'val_loss': float(val_loss.cpu())})
+                # Always provide all three subplots to maintain consistency
+                # Subplot 1: Total Loss
+                total_loss_dict = {}
+                if train_loss is not None:
+                    total_loss_dict['train_loss'] = float(train_loss.cpu())
+                if val_loss is not None:
+                    total_loss_dict['val_loss'] = float(val_loss.cpu())
+                metrics_list.append(total_loss_dict)
+
+                # Subplot 2: WLS Loss
+                wls_loss_dict = {}
+                if train_wls is not None:
+                    wls_loss_dict['train_wls'] = float(train_wls.cpu())
+                if val_wls is not None:
+                    wls_loss_dict['val_wls'] = float(val_wls.cpu())
+                metrics_list.append(wls_loss_dict)
+
+                # Subplot 3: Physical Loss
+                physical_loss_dict = {}
+                if train_physical is not None:
+                    physical_loss_dict['train_physical'] = float(train_physical.cpu())
+                if val_physical is not None:
+                    physical_loss_dict['val_physical'] = float(val_physical.cpu())
+                metrics_list.append(physical_loss_dict)
 
                 if metrics_list:
                     update_live_plot(current_epoch, metrics_list)
@@ -213,42 +248,46 @@ class GAT_DSSE_Lightning(pl.LightningModule):
             output_denorm[:, 1:] = output_denorm[:, 1:] * self.x_std[2:3] + self.x_mean[2:3]
             output_denorm[:, 1:] *= (1. - node_param[:, 1:2])  # Enforce theta_slack = 0
 
-            return mse_loss(output_denorm, y)
+            return mse_loss(output_denorm, y), None, None
 
         elif self.loss_type == 'gsp_wls':
             # Original combined loss function
-            return gsp_wls_edge(input=x, edge_input=edge_input,
+            total_loss = gsp_wls_edge(input=x, edge_input=edge_input,
                                 output=output, x_mean=self.x_mean,
                                 x_std=self.x_std, edge_mean=self.edge_mean,
                                 edge_std=self.edge_std, edge_index=edge_index,
                                 reg_coefs=self.reg_coefs, num_samples=num_samples,
                                 node_param=node_param, edge_param=edge_param)
+            return total_loss, None, None
 
         elif self.loss_type == 'wls':
             # WLS loss only
-            return wls_loss(output=output, input=x, edge_input=edge_input,
+            wls_val = wls_loss(output=output, input=x, edge_input=edge_input,
                            x_mean=self.x_mean, x_std=self.x_std,
                            edge_mean=self.edge_mean, edge_std=self.edge_std,
                            edge_index=edge_index, reg_coefs=self.reg_coefs,
                            node_param=node_param, edge_param=edge_param)
+            return wls_val, wls_val, None
 
         elif self.loss_type == 'physical':
             # Physical loss only
-            return physical_loss(output=output, x_mean=self.x_mean, x_std=self.x_std,
+            phys_val = physical_loss(output=output, x_mean=self.x_mean, x_std=self.x_std,
                                 edge_index=edge_index, edge_param=edge_param,
                                 node_param=node_param, reg_coefs=self.reg_coefs)
+            return phys_val, None, phys_val
 
         elif self.loss_type == 'wls_and_physical':
             # Combined loss with configurable weights
             lambda_wls = self.loss_kwargs.get('lambda_wls', 1.0)
             lambda_physical = self.loss_kwargs.get('lambda_physical', 1.0)
 
-            return wls_and_physical_loss(output=output, input=x, edge_input=edge_input,
+            total_loss, wls_val, phys_val = wls_and_physical_loss(output=output, input=x, edge_input=edge_input,
                                         x_mean=self.x_mean, x_std=self.x_std,
                                         edge_mean=self.edge_mean, edge_std=self.edge_std,
                                         edge_index=edge_index, reg_coefs=self.reg_coefs,
                                         node_param=node_param, edge_param=edge_param,
                                         lambda_wls=lambda_wls, lambda_physical=lambda_physical)
+            return total_loss, wls_val, phys_val
 
         else:
             raise ValueError(f"Unknown loss_type: {self.loss_type}. Options: 'gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse'")

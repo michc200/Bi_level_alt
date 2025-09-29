@@ -34,6 +34,7 @@ cd $PROJECT_NAME
 echo "Installing Python and dependencies..."
 
 # Install the robusttest package which will pull in all dependencies from pyproject.toml
+# Note: This includes plotly<5.0.0 to ensure compatibility with pandapower's titlefont usage
 uv add --editable ../dsml-main/
 
 # Navigate back to main directory

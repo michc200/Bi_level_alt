@@ -1,21 +1,15 @@
-import os
 import random
-import numpy as np
 import logging
 import subprocess
 from pathlib import Path
 import torch
 from torch_geometric.loader import DataLoader
-from pytorch_lightning import Trainer
 
 # Add parent directory to path for imports
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
-from external.models.gat_dsse import GAT_DSSE_Lightning
-from external.models.bi_level_gat_dsse import FAIR_GAT_BILEVEL_Lightning_Stable
 from src.robusttest.core.SE.baseline_state_estimation import BaselineStateEstimation
-from external.loss import wls_loss, physical_loss, wls_and_physical_loss
 
 # Setup logger
 logger = logging.getLogger("dsml_utils")
@@ -143,157 +137,9 @@ def load_or_create_grid_ts(grid_code, grid_save_path, measurement_rate=0.5):
     return grid_ts
 
 
-def get_model_config(model_str, num_bus):
-    """Get hyperparameter configuration for different model types."""
-    configs = {
-        'gat_dsse': {
-            'num_nfeat': 8,
-            'dim_nodes': 11,
-            'dim_lines': 6,
-            'dim_out': 2,
-            'dim_hid': 32,
-            'dim_dense': 32,
-            'gnn_layers': 5,
-            'heads': 1,
-            'K': 2,
-            'dropout_rate': 0.0,
-            'L': 5,
-            'lr': 1e-2,
-        },
-        'gat_dsse_mse': {
-            'num_nfeat': 8,
-            'dim_nodes': 11,
-            'dim_lines': 6,
-            'dim_out': 2,
-            'dim_hid': 32,
-            'dim_dense': 32,
-            'gnn_layers': 5,
-            'heads': 1,
-            'K': 2,
-            'dropout_rate': 0.0,
-            'L': 5,
-            'lr': 1e-2,
-        },
-        'mlp_dsse': {
-            'num_nfeat': 8,
-            'dim_nodes': 11,
-            'num_nodes': num_bus,
-            'dim_lines': 6,
-            'dim_out': 2,
-            'dim_hid': 32,
-            'mlp_layers': 4,
-            'dropout_rate': 0.3,
-            'L': 5,
-            'lr': 1e-2,
-        },
-        'mlp_dsse_mse': {
-            'num_nfeat': 8,
-            'dim_nodes': 11,
-            'num_nodes': num_bus,
-            'dim_lines': 6,
-            'dim_out': 2,
-            'dim_hid': 32,
-            'mlp_layers': 4,
-            'dropout_rate': 0.3,
-            'L': 5,
-            'lr': 1e-2,
-        },
-        'ensemble_gat_dsse': {
-            'num_nfeat': 8,
-            'dim_nodes': 11,
-            'dim_lines': 6,
-            'dim_out': 2,
-            'dim_hid': 32,
-            'dim_dense': 32,
-            'gnn_layers': 4,
-            'heads': 1,
-            'K': 2,
-            'dropout_rate': 0.0,
-            'L': 5,
-            'lr': 1e-2,
-        },
-        'bi_level_gat_dsse': {
-            'num_nfeat': 8,
-            'dim_nodes': 11,
-            'dim_lines': 6,
-            'dim_out': 2,
-            'dim_hid': 32,
-            'dim_dense': 32,
-            'gnn_layers': 5,
-            'heads': 1,
-            'K': 2,
-            'dropout_rate': 0.0,
-            'L': 5,
-            'lr': 1e-2,
-        }
-    }
-    return configs.get(model_str, configs['gat_dsse'])
 
 
-def train_se_methods(net, train_dataloader, val_dataloader, normalization_params,
-                    loss_kwargs, model_str='gat_dsse', epochs=50, save_path='', loss_type='gsp_wls'):
-    """
-    Train state estimation methods with specified parameters.
-
-    Args:
-        net: Power network
-        train_dataloader: Training data loader
-        val_dataloader: Validation data loader
-        normalization_params: Dictionary containing x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std
-        loss_kwargs: Unified loss configuration containing both regularization coefficients and lambda weights
-        model_str: Model type ('gat_dsse', 'mlp_dsse', etc.)
-        epochs: Number of training epochs
-        save_path: Path to save model
-        loss_type: Type of loss function ('gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse')
-
-    Returns:
-        trainer, model: Trained PyTorch Lightning trainer and model
-    """
-    num_bus = len(net.bus)
-    hyperparameters = get_model_config(model_str, num_bus)
-
-    # Extract normalization parameters
-    x_set_mean = normalization_params['x_set_mean']
-    x_set_std = normalization_params['x_set_std']
-    edge_attr_set_mean = normalization_params['edge_attr_set_mean']
-    edge_attr_set_std = normalization_params['edge_attr_set_std']
-
-    logger.info(f"Creating {model_str} model with {loss_type} loss")
-
-    if model_str.startswith('gat_dsse'):
-        model = GAT_DSSE_Lightning(
-            hyperparameters, x_set_mean, x_set_std,
-            edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
-            time_info=True, loss_type=loss_type, loss_kwargs=loss_kwargs
-        )
-
-    elif model_str == 'bi_level_gat_dsse':
-        model = FAIR_GAT_BILEVEL_Lightning_Stable(
-            hyperparameters, x_set_mean, x_set_std,
-            edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
-            time_info=True, loss_type=loss_type, loss_kwargs=loss_kwargs
-        )
-
-    else:
-        raise ValueError(f"Unknown model type: {model_str}")
-
-    # Create trainer
-    trainer = Trainer(
-        max_epochs=epochs,
-        accelerator=accelerator
-    )
-
-    # Train the model
-    trainer.fit(model, train_dataloader, val_dataloader)
-
-    # Save model
-    os.makedirs(f"{save_path}/{model_str}", exist_ok=True)
-    trainer.save_checkpoint(f"{save_path}/{model_str}/model.ckpt")
-
-    return trainer, model
-
-
-def create_datasets(grid_ts, baseline_se):
+def create_datasets(grid_ts):
     """
     Create datasets from grid and baseline data.
 
@@ -307,7 +153,7 @@ def create_datasets(grid_ts, baseline_se):
     logger.info("Creating PyTorch Geometric datasets...")
 
     # Create datasets from grid and baseline data
-    datasets = grid_ts.create_pyg_data(baseline_se.baseline_se_results_df)
+    datasets = grid_ts.create_pyg_data(grid_ts.values_bus_ts_df)
     train_data, val_data, test_data = datasets[:3]
     x_set_mean, x_set_std, edge_attr_set_mean, edge_attr_set_std = datasets[3:]
 
@@ -327,7 +173,7 @@ def create_datasets(grid_ts, baseline_se):
     return train_data, val_data, test_data, normalization_params
 
 
-def create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device):
+def create_datasets_and_loaders(grid_ts, batch_size, device):
     """
     Create PyTorch Geometric datasets and data loaders.
 
@@ -341,7 +187,7 @@ def create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device):
         tuple: (train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data)
     """
     # Create datasets
-    train_data, val_data, test_data, normalization_params = create_datasets(grid_ts, baseline_se)
+    train_data, val_data, test_data, normalization_params = create_datasets(grid_ts)
 
     # Move normalization parameters to device
     normalization_params = {
@@ -365,78 +211,4 @@ def create_datasets_and_loaders(grid_ts, baseline_se, batch_size, device):
     return train_loader, val_loader, test_loader, normalization_params, train_data, val_data, test_data
 
 
-def process_test_results(test_results, grid_ts):
-    """
-    Process test results from model predictions into a DataFrame.
 
-    Args:
-        test_results: List of prediction results from trainer.predict()
-        grid_ts: Grid time series instance for bus indexing
-
-    Returns:
-        pd.DataFrame: Processed test results with bus voltage magnitudes and angles
-    """
-    import pandas as pd
-    import numpy as np
-
-    logger.info("Processing test results...")
-    test_results_df = pd.DataFrame()
-
-    for timestamp, (vm_pu_tensor, va_degree_tensor) in enumerate(test_results):
-        vm_pu = vm_pu_tensor.squeeze().tolist()
-        va_degree = va_degree_tensor.squeeze().tolist()
-
-        for i in range(len(vm_pu)):
-            bus_id = grid_ts.net.bus.index[i]
-            test_results_df.loc[timestamp, f"bus_{bus_id}_vm_pu"] = vm_pu[i]
-            test_results_df.loc[timestamp, f"bus_{bus_id}_va_degree"] = va_degree[i] * (180 / np.pi)
-
-    logger.info("Test results processing completed!")
-    logger.info(f"Test time steps: {len(test_results_df)}")
-    logger.info(f"Variables predicted: {len(test_results_df.columns)}")
-
-    return test_results_df
-
-# def calculate_metrics(true_df, predicted_df):
-#     """
-#     Compute Root Mean Squared Error (RMSE) and Mean Absolute Error (MAE) between true and predicted values.
-
-#     Args:
-#         true_df (pd.DataFrame): DataFrame containing true values.
-#         predicted_df (pd.DataFrame): DataFrame containing predicted values.
-
-#     Returns:
-#         tuple: (rmse, mae, missing_data)
-#             - rmse (float): Root Mean Squared Error.
-#             - mae (float): Mean Absolute Error.
-#             - missing_data (int): Number of missing (NaN) values in the input data.
-
-#     Notes:
-#         - NaN values are ignored in the calculation.
-#         - If all values are NaN, returns NaN for both RMSE and MAE.
-#     """
-#     # Remove NaN values
-#     mask = ~np.isnan(true_df.values) & ~np.isnan(predicted_df.values)
-#     true_values = true_df.values[mask]
-#     predicted_values = predicted_df.values[mask]
-
-#     missing_data = np.isnan(true_df.values).sum() + np.isnan(predicted_df.values).sum()
-    
-#     if len(true_values) == 0:
-#         return np.nan, np.nan  # Return NaN if all values are NaN
-    
-#     rmse = np.sqrt(((true_values - predicted_values) ** 2).mean())
-#     mae = np.abs(true_values - predicted_values).mean()
-#     return rmse, mae, missing_data
-
-# def calculate_errors(true_df, predicted_df):   
-    vm_pu_true = true_df[[col for col in true_df.columns if col.endswith("_vm_pu")]]
-    vm_pu_pred = predicted_df[[col for col in predicted_df.columns if col.endswith("_vm_pu")]]
-    
-    va_degree_true = true_df[[col for col in true_df.columns if col.endswith("_va_degree")]]
-    va_degree_pred = predicted_df[[col for col in predicted_df.columns if col.endswith("_va_degree")]]
-    
-    rmse_vm, mae_vm, missing_data = calculate_metrics(vm_pu_true, vm_pu_pred)
-    rmse_va, mae_va, _ = calculate_metrics(va_degree_true, va_degree_pred)
-
-    return rmse_vm, mae_vm, rmse_va, mae_va

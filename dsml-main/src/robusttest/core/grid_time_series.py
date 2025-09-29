@@ -707,6 +707,15 @@ class GridTimeSeries:
         train_data = data_list[:train_idx]
         val_data = data_list[train_idx:val_idx]
         test_data = data_list[val_idx:]
+
+        self.train_idx = 0
+        self.train_len = len(train_data)
+
+        self.val_idx = train_idx
+        self.val_len = len(val_data)
+
+        self.test_idx = val_idx
+        self.test_len = len(test_data)
             
         for bus in self.net.bus.index:
             self.measurements_bus_ts_df[f'bus_{bus}_va_degree'] = ((self.measurements_bus_ts_df[f'bus_{bus}_va_degree']) * (180 /np.pi)) #% (2 * np.pi)
