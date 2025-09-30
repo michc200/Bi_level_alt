@@ -40,7 +40,7 @@ def get_model_config(model_str, num_bus):
             'gnn_layers': 5,
             'heads': 1,
             'K': 2,
-            'dropout_rate': 0.0,
+            'dropout_rate': 0.3,
             'L': 5,
             'lr': 1e-2,
         },

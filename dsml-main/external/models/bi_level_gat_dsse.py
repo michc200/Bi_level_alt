@@ -216,7 +216,7 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x = batch.x.clone()
         edge_index, edge_attr = batch.edge_index, batch.edge_attr
-        node_param = x[:, :self.num_nfeat]
+        node_param = x[:,self.num_nfeat:self.num_nfeat+3]
         edge_input = edge_attr[:, :self.num_efeat]
         edge_param = edge_attr[:, self.num_efeat:]
         # ensure num_samples is an int (batch.batch can be a tensor)
@@ -279,7 +279,7 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x = batch.x.clone()
         edge_index, edge_attr = batch.edge_index, batch.edge_attr
-        node_param = x[:, :self.num_nfeat]
+        node_param = x[:,self.num_nfeat:self.num_nfeat+3]
         x_gnn = x[:, :self.num_nfeat]
         edge_input = edge_attr[:, :self.num_efeat]
         edge_param = edge_attr[:, self.num_efeat:]
