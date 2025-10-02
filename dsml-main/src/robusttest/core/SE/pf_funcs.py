@@ -126,16 +126,17 @@ def gsp_wls_edge(input, edge_input, output, x_mean, x_std, edge_mean, edge_std, 
     J_sample = torch.sum(torch.mul(delta**2 * R_inv, meas_node_weights), axis=1)
     J_sample_edge = torch.sum(torch.mul(delta_edge**2 * R_edge_inv, meas_edge_weights), axis=1)
     
-    J = torch.mean(J_sample) + torch.mean(J_sample_edge[J_sample_edge != 0]) # [1,1]
+    J_wls = torch.mean(J_sample) + torch.mean(J_sample_edge[J_sample_edge != 0]) # [1,1]
     trafo_pos = (torch.tensor(edge_param[:, 5]) == 0).int()
 
     J_v = reg_coefs['lam_reg']*torch.mean(torch.relu(v_i - 1.1) + torch.relu(0.9 - v_i))**2
     J_theta = reg_coefs['lam_reg'] * torch.mean(torch.relu(torch.mul(theta_ij,trafo_pos) - 0.5))**2
     J_loading = reg_coefs['lam_reg'] *torch.mean(torch.relu(loading - 1.5))**2
-    
-    J_reg = J +  J_v +  J_theta +  J_loading # [1,1]
-    
-    return J_reg
+
+    J_physical = J_v + J_theta + J_loading
+    J_reg = J_wls + J_physical # [1,1]
+
+    return J_reg, J_wls, J_physical
 
 def compute_wls_loss(input, edge_input, output, x_mean, x_std, edge_mean, edge_std, edge_index, reg_coefs, node_param, edge_param):
     total_nodes = input.shape[0]

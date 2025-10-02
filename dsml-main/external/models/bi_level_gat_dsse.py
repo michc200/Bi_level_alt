@@ -178,8 +178,7 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
         follower_loss = physical_loss(
             output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
             edge_index=edge_index, edge_param=edge_param,
-            node_param=node_param, reg_coefs=self.reg_coefs,
-            lambda_physical=self.loss_kwargs.get('lambda_physical', 1.0))
+            node_param=node_param, reg_coefs=self.reg_coefs)
 
         # sanitize numeric issues and use non-trainable fallback if needed
         if not (torch.isnan(follower_loss) or torch.isinf(follower_loss)):
@@ -200,8 +199,7 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
             x_mean=self.x_mean, x_std=self.x_std,
             edge_mean=self.edge_mean, edge_std=self.edge_std,
             edge_index=edge_index, reg_coefs=self.reg_coefs,
-            node_param=node_param, edge_param=edge_param,
-            lambda_wls=self.loss_kwargs.get('lambda_wls', 1.0))
+            node_param=node_param, edge_param=edge_param)
 
         if not (torch.isnan(leader_loss) or torch.isinf(leader_loss)):
             leader_loss.backward()
@@ -289,14 +287,12 @@ class FAIR_GAT_BILEVEL_Lightning_Stable(pl.LightningModule):
 
             follower_loss = physical_loss(output=y_pred, x_mean=self.x_mean, x_std=self.x_std,
                                         edge_index=edge_index, edge_param=edge_param,
-                                        node_param=node_param, reg_coefs=self.reg_coefs,
-                                        lambda_physical=self.loss_kwargs.get('lambda_physical', 1.0))
+                                        node_param=node_param, reg_coefs=self.reg_coefs)
             leader_loss = wls_loss(output=y_pred, input=x_gnn, edge_input=edge_input,
                                  x_mean=self.x_mean, x_std=self.x_std,
                                  edge_mean=self.edge_mean, edge_std=self.edge_std,
                                  edge_index=edge_index, reg_coefs=self.reg_coefs,
-                                 node_param=node_param, edge_param=edge_param,
-                                 lambda_wls=self.loss_kwargs.get('lambda_wls', 1.0))
+                                 node_param=node_param, edge_param=edge_param)
             
             # Clip validation losses too
             total_loss = leader_loss + follower_loss

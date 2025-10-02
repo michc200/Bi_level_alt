@@ -1122,6 +1122,103 @@ def print_evaluation_metrics(test_results, initial_test_results, test_true):
         final_va_errors, initial_va_errors
     )
 
+    # Create first test sample plot
+    plot_first_test_sample(test_results, initial_test_results, test_true)
+
+
+def plot_first_test_sample(test_results, initial_test_results, test_true):
+    """
+    Plot first 3 test samples showing voltage predictions, measurements, and true values
+    for each bus/branch.
+
+    Args:
+        test_results: DataFrame with final model predictions (columns: timestamp, bus_idx, vm_pu, va_degree)
+        initial_test_results: DataFrame with initial model predictions
+        test_true: DataFrame with true values
+    """
+    logger.info("Creating first 3 test sample plots...")
+
+    # Get unique timestamps
+    unique_timestamps = test_true['timestamp'].unique()
+
+    # Select first 3 timestamps (or fewer if less available)
+    n_samples = min(3, len(unique_timestamps))
+    selected_timestamps = unique_timestamps[:n_samples]
+
+    # Create figure with 3 rows (one per sample) and 2 columns (VM and VA)
+    fig, axes = plt.subplots(n_samples, 2, figsize=(16, 5*n_samples))
+
+    # Ensure axes is 2D array even with single sample
+    if n_samples == 1:
+        axes = axes.reshape(1, -1)
+
+    for idx, timestamp in enumerate(selected_timestamps):
+        # Filter data for current timestamp
+        final_sample = test_results[test_results['timestamp'] == timestamp].sort_values('bus_idx')
+        initial_sample = initial_test_results[initial_test_results['timestamp'] == timestamp].sort_values('bus_idx')
+        true_sample = test_true[test_true['timestamp'] == timestamp].sort_values('bus_idx')
+
+        # Extract bus indices and values
+        bus_indices = true_sample['bus_idx'].values
+
+        # Voltage magnitude data
+        vm_true = true_sample['vm_pu'].values
+        vm_final = final_sample['vm_pu'].values
+        vm_initial = initial_sample['vm_pu'].values
+
+        # Voltage angle data
+        va_true = true_sample['va_degree'].values
+        va_final = final_sample['va_degree'].values
+        va_initial = initial_sample['va_degree'].values
+
+        # Create continuous x-axis for non-continuous bus indices
+        x_continuous = np.arange(len(bus_indices))
+
+        # Voltage Magnitude Plot (left column)
+        ax_vm = axes[idx, 0]
+        ax_vm.plot(x_continuous, vm_true, 'o-', label='True Values',
+                 color='orange', linewidth=2.5, markersize=8, alpha=0.8)
+        ax_vm.plot(x_continuous, vm_final, '^-', label='Final Model',
+                 color='red', linewidth=2, markersize=6, alpha=0.8)
+        ax_vm.plot(x_continuous, vm_initial, 's-', label='Initial Model',
+                 color='green', linewidth=2, markersize=6, alpha=0.8)
+
+        ax_vm.set_xlabel('Bus Index', fontsize=12)
+        ax_vm.set_ylabel('Voltage Magnitude (p.u.)', fontsize=12)
+        ax_vm.set_title(f'Sample {idx+1} (t={timestamp}) - Voltage Magnitude', fontsize=13)
+        ax_vm.legend(fontsize=10, loc='best')
+        ax_vm.grid(True, alpha=0.3)
+        ax_vm.set_xticks(x_continuous)
+        ax_vm.set_xticklabels(bus_indices, fontsize=10)
+
+        # Voltage Angle Plot (right column)
+        ax_va = axes[idx, 1]
+        ax_va.plot(x_continuous, va_true, 'o-', label='True Values',
+                 color='orange', linewidth=2.5, markersize=8, alpha=0.8)
+        ax_va.plot(x_continuous, va_final, '^-', label='Final Model',
+                 color='red', linewidth=2, markersize=6, alpha=0.8)
+        ax_va.plot(x_continuous, va_initial, 's-', label='Initial Model',
+                 color='green', linewidth=2, markersize=6, alpha=0.8)
+
+        ax_va.set_xlabel('Bus Index', fontsize=12)
+        ax_va.set_ylabel('Voltage Angle (degrees)', fontsize=12)
+        ax_va.set_title(f'Sample {idx+1} (t={timestamp}) - Voltage Angle', fontsize=13)
+        ax_va.legend(fontsize=10, loc='best')
+        ax_va.grid(True, alpha=0.3)
+        ax_va.set_xticks(x_continuous)
+        ax_va.set_xticklabels(bus_indices, fontsize=10)
+
+    # Overall title with more spacing
+    fig.suptitle('First 3 Test Sample Predictions', fontsize=16, fontweight='bold')
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.97, hspace=0.3, wspace=0.2)
+
+    # Show the plot
+    plt.show()
+
+    logger.info(f"First {n_samples} test sample plots created and displayed!")
+
 
 def create_error_histograms(final_vm_errors, initial_vm_errors, final_va_errors, initial_va_errors):
     """

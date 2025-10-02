@@ -108,7 +108,7 @@ class GAT_DSSE_Lightning(pl.LightningModule):
         # x_nodes = x[:,:self.num_nfeat]
 
         loss, wls_loss, physical_loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
-
+        print(f"training {loss}")
         # Initialize live plot on first training step
         if not self.live_plot_initialized:
             try:
@@ -155,7 +155,7 @@ class GAT_DSSE_Lightning(pl.LightningModule):
         # x_nodes = x[:,:self.num_nfeat]
         # Calculate loss based on the selected method
         loss, wls_loss, physical_loss = self.calculate_loss(x_nodes, edge_input, output, edge_index, node_param, edge_param, num_samples, y)
-
+        print(f"validation {loss}")
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         if wls_loss is not None:
             self.log("val_wls", wls_loss, on_step=False, on_epoch=True, logger=True)
@@ -250,15 +250,15 @@ class GAT_DSSE_Lightning(pl.LightningModule):
 
             return mse_loss(output_denorm, y), None, None
 
-        elif self.loss_type == 'gsp_wls':
-            # Original combined loss function
-            total_loss = gsp_wls_edge(input=x, edge_input=edge_input,
+        elif self.loss_type == 'gsp_wls' or self.loss_type == 'gsp_wls_edge':
+            # Original combined loss function - returns total, wls, and physical losses
+            total_loss, wls_val, phys_val = gsp_wls_edge(input=x, edge_input=edge_input,
                                 output=output, x_mean=self.x_mean,
                                 x_std=self.x_std, edge_mean=self.edge_mean,
                                 edge_std=self.edge_std, edge_index=edge_index,
                                 reg_coefs=self.reg_coefs, num_samples=num_samples,
                                 node_param=node_param, edge_param=edge_param)
-            return total_loss, None, None
+            return total_loss, wls_val, phys_val
 
         elif self.loss_type == 'wls':
             # WLS loss only
@@ -290,7 +290,7 @@ class GAT_DSSE_Lightning(pl.LightningModule):
             return total_loss, wls_val, phys_val
 
         else:
-            raise ValueError(f"Unknown loss_type: {self.loss_type}. Options: 'gsp_wls', 'wls', 'physical', 'wls_and_physical', 'mse'")
+            raise ValueError(f"Unknown loss_type: {self.loss_type}. Options: 'gsp_wls', 'gsp_wls_edge', 'wls', 'physical', 'wls_and_physical', 'mse'")
 
     def configure_optimizers(self):
         """Configure the optimizer and learning rate scheduler."""

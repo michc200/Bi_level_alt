@@ -49,7 +49,7 @@ MEASUREMENT_RATE = 0.9
 SEED = 15
 
 # Model Parameters
-MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'bi_level_gat_dsse', 'gat_dsse_lipschitz'
+MODEL_TYPE = 'bi_level_gat_dsse'  # Options: 'gat_dsse', 'bi_level_gat_dsse', 'gat_dsse_lipschitz'
 EPOCHS = 100
 BATCH_SIZE = 64
 LIPSCHITZ_K = 1.0  # Lipschitz constant for lipschitz models
@@ -58,7 +58,7 @@ LIPSCHITZ_K = 1.0  # Lipschitz constant for lipschitz models
 LOSS_TYPE = 'wls_and_physical'  # Options: 'wls', 'physical', 'wls_and_physical', 'mse'
 LOSS_KWARGS = {
     "lambda_physical" : 1,
-    "lambda_wls" : 1,
+    "lambda_wls" : 10,
     'lam_v': 1,
     'lam_p': 1,
     'lam_pf': 1,

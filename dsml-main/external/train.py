@@ -41,7 +41,7 @@ def get_model_config(model_str, num_bus):
             'gnn_layers': 5,
             'heads': 1,
             'K': 2,
-            'dropout_rate': 0.3,
+            'dropout_rate': 0,
             'L': 5,
             'lr': 1e-2,
         },
@@ -222,7 +222,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
         model = GAT_DSSE_Lipschitz_Lightning(
             hyperparameters, x_set_mean, x_set_std,
             edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
-            time_info=True, loss_type=loss_type, loss_kwargs=loss_kwargs, lipschitz_k=lipschitz_k
+            time_info=True, loss_type=loss_type, lipschitz_k=lipschitz_k
         )
 
     elif model_str.startswith('gat_dsse'):
@@ -230,7 +230,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
         model = GAT_DSSE_Lightning(
             hyperparameters, x_set_mean, x_set_std,
             edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
-            time_info=True, loss_type=loss_type, loss_kwargs=loss_kwargs
+            time_info=True, loss_type=loss_type
         )
 
     elif model_str == 'bi_level_gat_dsse':
@@ -238,7 +238,7 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
         model = FAIR_GAT_BILEVEL_Lightning_Stable(
             hyperparameters, x_set_mean, x_set_std,
             edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
-            time_info=True, loss_type=loss_type, loss_kwargs=loss_kwargs
+            time_info=True, loss_type=loss_type
         )
 
     else:
