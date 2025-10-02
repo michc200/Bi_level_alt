@@ -49,7 +49,7 @@ MEASUREMENT_RATE = 0.9
 SEED = 15
 
 # Model Parameters
-MODEL_TYPE = 'bi_level_gat_dsse'  # Options: 'gat_dsse', 'bi_level_gat_dsse', 'gat_dsse_lipschitz'
+MODEL_TYPE = 'gat_dsse_lipschitz'  # Options: 'gat_dsse', 'bi_level_gat_dsse', 'gat_dsse_lipschitz'
 EPOCHS = 100
 BATCH_SIZE = 64
 LIPSCHITZ_K = 1.0  # Lipschitz constant for lipschitz models

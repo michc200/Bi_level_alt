@@ -18,6 +18,7 @@ from pytorch_lightning import Trainer
 
 from external.models.gat_dsse import GAT_DSSE_Lightning
 from external.models.bi_level_gat_dsse import FAIR_GAT_BILEVEL_Lightning_Stable
+from external.models.gat_dsse_lipschitz import GAT_DSSE_Lipschitz_Lightning
 
 # Add parent directory to path for imports
 import sys
@@ -82,16 +83,18 @@ def transform_datasets_format(df):
     return pd.DataFrame(rows, columns=['timestamp', 'bus_idx'] + data_names)
 
 def load_model_from_cpkt_file(cpkt_path):
-    
+
     cpkt_path = Path(cpkt_path)
 
     if cpkt_path.parent.parent.name == "gat_dsse":
         LightningModule = GAT_DSSE_Lightning
     elif cpkt_path.parent.parent.name == "bi_level_gat_dsse":
         LightningModule = FAIR_GAT_BILEVEL_Lightning_Stable
+    elif cpkt_path.parent.parent.name == "gat_dsse_lipschitz":
+        LightningModule = GAT_DSSE_Lipschitz_Lightning
     else:
         raise ValueError(f"Unknown model type: {cpkt_path.parent.parent.name}")
-    
+
     model = LightningModule.load_from_checkpoint(str(cpkt_path))
 
     return model 
