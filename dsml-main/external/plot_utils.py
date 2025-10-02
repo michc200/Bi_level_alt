@@ -121,26 +121,39 @@ def plot_state_estimation_results(test_results_df, baseline_se, grid_ts, train_d
     ax2.legend(fontsize=12, loc='best')
     ax2.grid(True, alpha=0.3)
 
-    # --- RMSE & MAE Bar Plot (full test set) ---
+    # --- RMSE, MAE & STD Bar Plot (full test set) ---
+    def std(y_true, y_pred):
+        return np.std(np.array(y_true) - np.array(y_pred))
+
+    # Compute STD metrics
+    metrics['STD_vm_model'] = std(true_vm, model_vm)
+    metrics['STD_vm_baseline'] = std(true_vm, baseline_vm)
+    metrics['STD_va_model'] = std(true_va, model_va)
+    metrics['STD_va_baseline'] = std(true_va, baseline_va)
+
     categories = ['Voltage Magnitude', 'Voltage Angle']
     model_rmse = [metrics['RMSE_vm_model'], metrics['RMSE_va_model']]
     baseline_rmse = [metrics['RMSE_vm_baseline'], metrics['RMSE_va_baseline']]
     model_mae = [metrics['MAE_vm_model'], metrics['MAE_va_model']]
     baseline_mae = [metrics['MAE_vm_baseline'], metrics['MAE_va_baseline']]
+    model_std = [metrics['STD_vm_model'], metrics['STD_va_model']]
+    baseline_std = [metrics['STD_vm_baseline'], metrics['STD_va_baseline']]
 
-    width = 0.18
+    width = 0.13
     x = np.arange(len(categories))
 
-    ax3.bar(x - 1.5*width, model_rmse, width, label=f'{model_type.upper()} RMSE', color='red')
-    ax3.bar(x - 0.5*width, baseline_rmse, width, label='Baseline RMSE', color='green')
-    ax3.bar(x + 0.5*width, model_mae, width, label=f'{model_type.upper()} MAE', color='salmon')
-    ax3.bar(x + 1.5*width, baseline_mae, width, label='Baseline MAE', color='limegreen')
+    ax3.bar(x - 2.5*width, model_rmse, width, label=f'{model_type.upper()} RMSE', color='red')
+    ax3.bar(x - 1.5*width, baseline_rmse, width, label='Baseline RMSE', color='green')
+    ax3.bar(x - 0.5*width, model_mae, width, label=f'{model_type.upper()} MAE', color='salmon')
+    ax3.bar(x + 0.5*width, baseline_mae, width, label='Baseline MAE', color='limegreen')
+    ax3.bar(x + 1.5*width, model_std, width, label=f'{model_type.upper()} STD', color='purple')
+    ax3.bar(x + 2.5*width, baseline_std, width, label='Baseline STD', color='violet')
 
     ax3.set_xticks(x)
     ax3.set_xticklabels(categories, fontsize=13)
     ax3.set_ylabel('Error Value', fontsize=14)
-    ax3.set_title('RMSE and MAE over Entire Test Set', fontsize=14)
-    ax3.legend(fontsize=12, loc='best')
+    ax3.set_title('RMSE, MAE, and STD over Entire Test Set', fontsize=14)
+    ax3.legend(fontsize=10, loc='best')
     ax3.grid(axis='y', alpha=0.3)
 
     # Add numeric labels above bars

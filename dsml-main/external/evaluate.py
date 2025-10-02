@@ -1087,23 +1087,27 @@ def print_evaluation_metrics(test_results, initial_test_results, test_true):
     # Calculate metrics
     final_vm_mse = np.mean(final_vm_squared_errors)
     final_vm_rmse = np.sqrt(final_vm_mse)
+    final_vm_std = np.std(vm_final - vm_true)
     initial_vm_mse = np.mean(initial_vm_squared_errors)
     initial_vm_rmse = np.sqrt(initial_vm_mse)
+    initial_vm_std = np.std(vm_initial - vm_true)
 
     final_va_mse = np.mean(final_va_squared_errors)
     final_va_rmse = np.sqrt(final_va_mse)
+    final_va_std = np.std(final_angle_diff)
     initial_va_mse = np.mean(initial_va_squared_errors)
     initial_va_rmse = np.sqrt(initial_va_mse)
+    initial_va_std = np.std(initial_angle_diff)
 
     # Print results
     logger.info("VOLTAGE MAGNITUDE METRICS (p.u.):")
-    logger.info(f"  Initial Model  - MSE: {initial_vm_mse:.8f},   RMSE: {initial_vm_rmse:.8f}")
-    logger.info(f"  Final Model    - MSE: {final_vm_mse:.8f},   RMSE: {final_vm_rmse:.8f}")
+    logger.info(f"  Initial Model  - MSE: {initial_vm_mse:.8f},   RMSE: {initial_vm_rmse:.8f},   STD: {initial_vm_std:.8f}")
+    logger.info(f"  Final Model    - MSE: {final_vm_mse:.8f},   RMSE: {final_vm_rmse:.8f},   STD: {final_vm_std:.8f}")
 
     logger.info("")
     logger.info("VOLTAGE ANGLE METRICS (degrees):")
-    logger.info(f"  Initial Model  - MSE: {initial_va_mse:.8f},   RMSE: {initial_va_rmse:.8f}")
-    logger.info(f"  Final Model    - MSE: {final_va_mse:.8f},   RMSE: {final_va_rmse:.8f}")
+    logger.info(f"  Initial Model  - MSE: {initial_va_mse:.8f},   RMSE: {initial_va_rmse:.8f},   STD: {initial_va_std:.8f}")
+    logger.info(f"  Final Model    - MSE: {final_va_mse:.8f},   RMSE: {final_va_rmse:.8f},   STD: {final_va_std:.8f}")
 
     logger.info("="*80)
 
@@ -1134,13 +1138,17 @@ def create_error_histograms(final_vm_errors, initial_vm_errors, final_va_errors,
     # Calculate metrics from errors
     final_vm_mae = np.mean(final_vm_errors)
     final_vm_rmse = np.sqrt(np.mean(final_vm_errors ** 2))
+    final_vm_std = np.std(final_vm_errors)
     initial_vm_mae = np.mean(initial_vm_errors)
     initial_vm_rmse = np.sqrt(np.mean(initial_vm_errors ** 2))
+    initial_vm_std = np.std(initial_vm_errors)
 
     final_va_mae = np.mean(final_va_errors)
     final_va_rmse = np.sqrt(np.mean(final_va_errors ** 2))
+    final_va_std = np.std(final_va_errors)
     initial_va_mae = np.mean(initial_va_errors)
     initial_va_rmse = np.sqrt(np.mean(initial_va_errors ** 2))
+    initial_va_std = np.std(initial_va_errors)
 
     # Determine common x-axis ranges
     vm_x_max = max(np.max(final_vm_errors), np.max(initial_vm_errors))
@@ -1158,8 +1166,8 @@ def create_error_histograms(final_vm_errors, initial_vm_errors, final_va_errors,
                 label=f'MAE: {final_vm_mae:.6f}')
     ax1.set_xlabel('Error (p.u.)', fontsize=12)
     ax1.set_ylabel('Frequency', fontsize=12)
-    ax1.set_title('Final Model - VM Error Distribution', fontsize=10)
-    ax1.legend()
+    ax1.set_title(f'Final Model - VM Error Distribution\nSTD: {final_vm_std:.6f}', fontsize=10)
+    ax1.legend(fontsize=9)
     ax1.grid(True, alpha=0.3)
 
     # Subplot 2: Voltage Magnitude Errors - Initial Model
@@ -1170,8 +1178,8 @@ def create_error_histograms(final_vm_errors, initial_vm_errors, final_va_errors,
                 label=f'MAE: {initial_vm_mae:.6f}')
     ax2.set_xlabel('Error (p.u.)', fontsize=12)
     ax2.set_ylabel('Frequency', fontsize=12)
-    ax2.set_title('Initial Model - VM Error Distribution', fontsize=10)
-    ax2.legend()
+    ax2.set_title(f'Initial Model - VM Error Distribution\nSTD: {initial_vm_std:.6f}', fontsize=10)
+    ax2.legend(fontsize=9)
     ax2.grid(True, alpha=0.3)
 
     # Subplot 3: Voltage Angle Errors - Final Model
@@ -1182,8 +1190,8 @@ def create_error_histograms(final_vm_errors, initial_vm_errors, final_va_errors,
                 label=f'MAE: {final_va_mae:.6f}')
     ax3.set_xlabel('Error (degrees)', fontsize=12)
     ax3.set_ylabel('Frequency', fontsize=12)
-    ax3.set_title('Final Model - VA Error Distribution', fontsize=10)
-    ax3.legend()
+    ax3.set_title(f'Final Model - VA Error Distribution\nSTD: {final_va_std:.6f}', fontsize=10)
+    ax3.legend(fontsize=9)
     ax3.grid(True, alpha=0.3)
 
     # Subplot 4: Voltage Angle Errors - Initial Model
@@ -1194,8 +1202,8 @@ def create_error_histograms(final_vm_errors, initial_vm_errors, final_va_errors,
                 label=f'MAE: {initial_va_mae:.6f}')
     ax4.set_xlabel('Error (degrees)', fontsize=12)
     ax4.set_ylabel('Frequency', fontsize=12)
-    ax4.set_title('Initial Model - VA Error Distribution', fontsize=10)
-    ax4.legend()
+    ax4.set_title(f'Initial Model - VA Error Distribution\nSTD: {initial_va_std:.6f}', fontsize=10)
+    ax4.legend(fontsize=9)
     ax4.grid(True, alpha=0.3)
 
     # Normalize axes

@@ -49,9 +49,10 @@ MEASUREMENT_RATE = 0.9
 SEED = 15
 
 # Model Parameters
-MODEL_TYPE = 'bi_level_gat_dsse'  # Options: 'gat_dsse', 'bi_level_gat_dsse'
+MODEL_TYPE = 'gat_dsse'  # Options: 'gat_dsse', 'bi_level_gat_dsse', 'gat_dsse_lipschitz'
 EPOCHS = 100
 BATCH_SIZE = 64
+LIPSCHITZ_K = 1.0  # Lipschitz constant for lipschitz models
 
 # Loss Configuration
 LOSS_TYPE = 'wls_and_physical'  # Options: 'wls', 'physical', 'wls_and_physical', 'mse'
@@ -157,7 +158,8 @@ trainer, model, model_dir = train_se_methods(
     model_str=MODEL_TYPE,
     epochs=EPOCHS,
     save_path=str(MODEL_DIR),
-    loss_type=LOSS_TYPE
+    loss_type=LOSS_TYPE,
+    lipschitz_k=LIPSCHITZ_K
 )
 
 logger.info("Model training completed!")

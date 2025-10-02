@@ -17,6 +17,7 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
 from external.models.gat_dsse import GAT_DSSE_Lightning
+from external.models.gat_dsse_lipschitz import GAT_DSSE_Lipschitz_Lightning
 from external.models.bi_level_gat_dsse import FAIR_GAT_BILEVEL_Lightning_Stable
 
 # Setup logger
@@ -109,6 +110,20 @@ def get_model_config(model_str, num_bus):
             'dropout_rate': 0.0,
             'L': 5,
             'lr': 1e-2,
+        },
+        'gat_dsse_lipschitz': {
+            'num_nfeat': 8,
+            'dim_nodes': 11,
+            'dim_lines': 6,
+            'dim_out': 2,
+            'dim_hid': 32,
+            'dim_dense': 32,
+            'gnn_layers': 5,
+            'heads': 1,
+            'K': 2,
+            'dropout_rate': 0.3,
+            'L': 5,
+            'lr': 1e-2,
         }
     }
     return configs.get(model_str, configs['gat_dsse'])
@@ -173,7 +188,7 @@ class CustomProgressCallback(Callback):
 
 
 def train_se_methods(net, train_dataloader, val_dataloader, normalization_params,
-                    loss_kwargs, model_str='gat_dsse', epochs=50, save_path='', loss_type='gsp_wls'):
+                    loss_kwargs, model_str='gat_dsse', epochs=50, save_path='', loss_type='gsp_wls', lipschitz_k=1.0):
     """
     Train state estimation methods with specified parameters.
 
@@ -202,7 +217,15 @@ def train_se_methods(net, train_dataloader, val_dataloader, normalization_params
 
     logger.info(f"Creating {model_str} model with {loss_type} loss")
 
-    if model_str.startswith('gat_dsse'):
+    if model_str == 'gat_dsse_lipschitz':
+        MyLightningModule = GAT_DSSE_Lipschitz_Lightning
+        model = GAT_DSSE_Lipschitz_Lightning(
+            hyperparameters, x_set_mean, x_set_std,
+            edge_attr_set_mean, edge_attr_set_std, loss_kwargs,
+            time_info=True, loss_type=loss_type, loss_kwargs=loss_kwargs, lipschitz_k=lipschitz_k
+        )
+
+    elif model_str.startswith('gat_dsse'):
         MyLightningModule = GAT_DSSE_Lightning
         model = GAT_DSSE_Lightning(
             hyperparameters, x_set_mean, x_set_std,
