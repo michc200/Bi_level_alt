@@ -1040,10 +1040,9 @@ def evaluate_model(model_dir, test_loader, grid_ts, baseline_se, train_data, val
 
 #     return plot_path
 
-
 def print_evaluation_metrics(test_results, initial_test_results, test_true):
     """
-    Calculate and print RMSE and MSE metrics comparing models to true values.
+    Calculate and print RMSE, MSE, MAE, and Std metrics comparing models to true values.
 
     Args:
         test_results: DataFrame with final model predictions (columns: timestamp, bus_idx, vm_pu, va_degree, etc.)
@@ -1057,7 +1056,7 @@ def print_evaluation_metrics(test_results, initial_test_results, test_true):
     # Ensure all dataframes have the same length and order
     logger.info(f"Data shapes - True: {test_true.shape}, Final: {test_results.shape}, Initial: {initial_test_results.shape}")
 
-    # Extract aligned data directly
+    # Extract aligned data
     vm_true = test_true['vm_pu']
     vm_final = test_results['vm_pu']
     vm_initial = initial_test_results['vm_pu']
@@ -1066,12 +1065,7 @@ def print_evaluation_metrics(test_results, initial_test_results, test_true):
     va_final = test_results['va_degree']
     va_initial = initial_test_results['va_degree']
 
-    # Calculate voltage magnitude errors
-    final_vm_squared_errors = (vm_final - vm_true) ** 2
-    initial_vm_squared_errors = (vm_initial - vm_true) ** 2
-
-    # Calculate voltage angle errors (with proper angular difference)
-
+    # Helper for angular difference (±180 wrap)
     def angular_difference(pred, true):
         diff = pred - true
         diff = np.where(diff > 180, diff - 360, diff)
@@ -1081,43 +1075,53 @@ def print_evaluation_metrics(test_results, initial_test_results, test_true):
     final_angle_diff = angular_difference(va_final, va_true)
     initial_angle_diff = angular_difference(va_initial, va_true)
 
-    final_va_squared_errors = final_angle_diff ** 2
-    initial_va_squared_errors = initial_angle_diff ** 2
-
-    # Calculate metrics
-    final_vm_mse = np.mean(final_vm_squared_errors)
+    # --- MSE and RMSE ---
+    final_vm_mse = np.mean((vm_final - vm_true) ** 2)
     final_vm_rmse = np.sqrt(final_vm_mse)
-    initial_vm_mse = np.mean(initial_vm_squared_errors)
+    initial_vm_mse = np.mean((vm_initial - vm_true) ** 2)
     initial_vm_rmse = np.sqrt(initial_vm_mse)
 
-    final_va_mse = np.mean(final_va_squared_errors)
+    final_va_mse = np.mean(final_angle_diff ** 2)
     final_va_rmse = np.sqrt(final_va_mse)
-    initial_va_mse = np.mean(initial_va_squared_errors)
+    initial_va_mse = np.mean(initial_angle_diff ** 2)
     initial_va_rmse = np.sqrt(initial_va_mse)
 
-    # Print results
+    # --- MAE ---
+    final_vm_mae = np.mean(np.abs(vm_final - vm_true))
+    initial_vm_mae = np.mean(np.abs(vm_initial - vm_true))
+    final_va_mae = np.mean(np.abs(final_angle_diff))
+    initial_va_mae = np.mean(np.abs(initial_angle_diff))
+
+    # --- Std values ---
+    pred_std_vm = vm_final.std()
+    true_std_vm = vm_true.std()
+    pred_std_va = va_final.std()
+    true_std_va = va_true.std()
+
+    # --- PRINT ALL METRICS ---
     logger.info("VOLTAGE MAGNITUDE METRICS (p.u.):")
-    logger.info(f"  Initial Model  - MSE: {initial_vm_mse:.8f},   RMSE: {initial_vm_rmse:.8f}")
-    logger.info(f"  Final Model    - MSE: {final_vm_mse:.8f},   RMSE: {final_vm_rmse:.8f}")
+    logger.info(f"  Initial Model  - MSE: {initial_vm_mse:.8f},   RMSE: {initial_vm_rmse:.8f},   MAE: {initial_vm_mae:.8f}")
+    logger.info(f"  Final Model    - MSE: {final_vm_mse:.8f},   RMSE: {final_vm_rmse:.8f},   MAE: {final_vm_mae:.8f}")
+    logger.info(f"  Std (Predicted): {pred_std_vm:.8f},   Std (True): {true_std_vm:.8f}")
 
     logger.info("")
     logger.info("VOLTAGE ANGLE METRICS (degrees):")
-    logger.info(f"  Initial Model  - MSE: {initial_va_mse:.8f},   RMSE: {initial_va_rmse:.8f}")
-    logger.info(f"  Final Model    - MSE: {final_va_mse:.8f},   RMSE: {final_va_rmse:.8f}")
+    logger.info(f"  Initial Model  - MSE: {initial_va_mse:.8f},   RMSE: {initial_va_rmse:.8f},   MAE: {initial_va_mae:.8f}")
+    logger.info(f"  Final Model    - MSE: {final_va_mse:.8f},   RMSE: {final_va_rmse:.8f},   MAE: {final_va_mae:.8f}")
+    logger.info(f"  Std (Predicted): {pred_std_va:.8f},   Std (True): {true_std_va:.8f}")
 
     logger.info("="*80)
 
-    # Create error histogram plots
-    final_vm_errors = np.sqrt(final_vm_squared_errors)
-    initial_vm_errors = np.sqrt(initial_vm_squared_errors)
-    final_va_errors = np.sqrt(final_va_squared_errors)
-    initial_va_errors = np.sqrt(initial_va_squared_errors)
+    # Error histograms
+    final_vm_errors = np.sqrt((vm_final - vm_true) ** 2)
+    initial_vm_errors = np.sqrt((vm_initial - vm_true) ** 2)
+    final_va_errors = np.sqrt(final_angle_diff ** 2)
+    initial_va_errors = np.sqrt(initial_angle_diff ** 2)
 
     create_error_histograms(
         final_vm_errors, initial_vm_errors,
         final_va_errors, initial_va_errors
     )
-
 
 def create_error_histograms(final_vm_errors, initial_vm_errors, final_va_errors, initial_va_errors):
     """
@@ -1226,7 +1230,6 @@ def create_error_histograms(final_vm_errors, initial_vm_errors, final_va_errors,
     plt.show()
 
     logger.info("Error histogram plots created and displayed!")
-
 
 def plot_error_histogram():
     """

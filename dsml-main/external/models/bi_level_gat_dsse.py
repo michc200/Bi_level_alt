@@ -499,20 +499,28 @@ class GAT_DSSE_BiLevel_Stable(nn.Module):
 
 
 class StableLipschitzNorm(nn.Module):
-    """More stable version of Lipschitz normalization"""
+    """More stable version of Lipschitz normalization (edge-aware)."""
     def __init__(self, att_norm: float = 2.0, eps: float = 1e-8):
         super().__init__()
         self.att_norm = float(att_norm)
         self.eps = float(eps)
 
-    def forward(self, e_ij: Tensor, x_i: Tensor, x_j: Tensor, index: Tensor) -> Tensor:
-        # Compute norms with numerical stability
+    def forward(self, e_ij: Tensor, x_i: Tensor, x_j: Tensor,
+                index: Tensor, edge_attr_proj: Optional[Tensor] = None) -> Tensor:
+        """
+        e_ij: [E, H] raw logits (pre-normalization)
+        x_i:  [E, H, C] or [E, H*C] depending on caller (we use norms across last dim)
+        x_j:  same shape as x_i
+        index: edge index target nodes (source indexing consistent with softmax's index)
+        edge_attr_proj: optional projected edge features shaped [E, H, C] (same layout as x)
+        """
+        # Compute norms with numerical stability (reduce last dim)
         ni = torch.norm(x_i, dim=-1, p=2) + self.eps  # [E, H]
         nj = torch.norm(x_j, dim=-1, p=2) + self.eps  # [E, H]
-        
-        # More stable max reduction
-        max_nj_per_node = torch.zeros(index.max().item() + 1, nj.size(-1), 
-                                    device=nj.device, dtype=nj.dtype)
+
+        # More stable max reduction for neighbor node norms
+        max_nj_per_node = torch.zeros(index.max().item() + 1, nj.size(-1),
+                                      device=nj.device, dtype=nj.dtype)
         max_nj_per_node = max_nj_per_node.scatter_reduce(
             dim=0,
             index=index.unsqueeze(-1).expand_as(nj),
@@ -520,9 +528,24 @@ class StableLipschitzNorm(nn.Module):
             reduce="amax",
             include_self=False
         ) + self.eps
-        
-        denom = self.att_norm * (ni + max_nj_per_node[index]) + self.eps
-        
+
+        # Edge-feature norms (if provided) - compute and reduce per source node analogously
+        if edge_attr_proj is not None:
+            # edge_attr_proj expected shape: [E, H, C] -> norm -> [E, H]
+            edge_norm = torch.norm(edge_attr_proj, dim=-1, p=2) + self.eps  # [E, H]
+            max_edge_per_node = torch.zeros(index.max().item() + 1, edge_norm.size(-1),
+                                            device=edge_norm.device, dtype=edge_norm.dtype)
+            max_edge_per_node = max_edge_per_node.scatter_reduce(
+                dim=0,
+                index=index.unsqueeze(-1).expand_as(edge_norm),
+                src=edge_norm,
+                reduce="amax",
+                include_self=False
+            ) + self.eps
+            denom = self.att_norm * (ni + max_nj_per_node[index] + max_edge_per_node[index]) + self.eps
+        else:
+            denom = self.att_norm * (ni + max_nj_per_node[index]) + self.eps
+
         # Stable division with clipping
         ratio = e_ij / denom
         return torch.clamp(ratio, -10.0, 10.0)
@@ -547,6 +570,17 @@ class GATv2ConvNorm(GATv2Conv):
             edge_attr = self.lin_edge(edge_attr)
             edge_attr = edge_attr.view(-1, self.heads, self.out_channels)
             x = x + edge_attr
+
+        x = F.leaky_relu(x, negative_slope=0.01)
+
+        # Pre-softmax logits
+        e_ij = (x * self.att).sum(dim=-1)  # [E, H]
+
+        # Lipschitz scaling with edge-aware normalization
+        if self.enable_lip and self.lipschitz_norm is not None:
+            # pass the projected edge_attr into the Lipschitz norm so its norms
+            # are included in the denominator
+            e_ij = self.lipschitz_norm(e_ij, x_i, x_j, index, edge_attr_proj=edge_attr if edge_attr is not None else None)
 
         x = F.leaky_relu(x, negative_slope=0.01)  # Less aggressive slope
 
